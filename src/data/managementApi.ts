@@ -11,6 +11,8 @@ import {
   Announcement,
   Cohort,
   Course,
+  IntakeProgramme,
+  InterviewRecord,
   PlacementRecord,
   StaffMember,
   StaffRole,
@@ -41,7 +43,13 @@ const K = {
   placements: 'ra.mgmt.placements.v1',
   announcements: 'ra.mgmt.announcements.v1',
   members: 'ra.mgmt.members.v1',
+  interviews: 'ra.mgmt.interviews.v1',
+  intake: 'ra.mgmt.intake.v1',
 };
+
+export function newId(): string {
+  return (typeof crypto !== 'undefined' && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+}
 
 // ---------------------------------------------------------------------------
 // Cohorts
@@ -210,6 +218,76 @@ export async function inviteMemberAsync(email: string, role: StaffRole, name?: s
   const existing = (await fetchMembers()).find((m) => m.email.toLowerCase() === clean);
   if (existing) { await upsertMember({ ...existing, role }); return; }
   await upsertMember({ id: `m-${Date.now()}`, name: name?.trim() || clean.split('@')[0], email: clean, role, status: 'invited', invitedAt: new Date().toISOString() });
+}
+
+// ---------------------------------------------------------------------------
+// Interviews (per student)
+// ---------------------------------------------------------------------------
+
+function mapInterview(r: any): InterviewRecord {
+  return { id: String(r.id), studentId: r.student_id, company: r.company, role: r.role ?? undefined, date: r.date, outcome: r.outcome, notes: r.notes ?? undefined };
+}
+export async function fetchInterviews(studentId: string): Promise<InterviewRecord[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      const { data, error } = await sb.from('interviews').select('*').eq('student_id', studentId).order('date', { ascending: false });
+      if (!error && Array.isArray(data)) return data.map(mapInterview);
+    }
+  }
+  return read<InterviewRecord[]>(K.interviews, []).filter((i) => i.studentId === studentId);
+}
+export async function saveInterview(rec: InterviewRecord): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('interviews').upsert({ id: rec.id, student_id: rec.studentId, company: rec.company, role: rec.role ?? null, date: rec.date, outcome: rec.outcome, notes: rec.notes ?? null }); return; }
+  }
+  const all = read<InterviewRecord[]>(K.interviews, []);
+  const i = all.findIndex((x) => x.id === rec.id);
+  if (i >= 0) all[i] = rec; else all.push(rec);
+  write(K.interviews, all);
+}
+export async function deleteInterview(id: string): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('interviews').delete().eq('id', id); return; }
+  }
+  write(K.interviews, read<InterviewRecord[]>(K.interviews, []).filter((i) => i.id !== id));
+}
+
+// ---------------------------------------------------------------------------
+// Intake / upcoming-course pipeline
+// ---------------------------------------------------------------------------
+
+function mapIntake(r: any): IntakeProgramme {
+  return { id: String(r.id), quarter: r.quarter, programNumber: r.program_number, domain: r.domain, quantity: r.quantity, status: r.status, startDate: r.start_date ?? undefined, note: r.note ?? undefined };
+}
+export async function fetchIntake(): Promise<IntakeProgramme[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      const { data, error } = await sb.from('intake_programmes').select('*').order('quarter', { ascending: true });
+      if (!error && Array.isArray(data)) return data.map(mapIntake);
+    }
+  }
+  return read<IntakeProgramme[]>(K.intake, []);
+}
+export async function saveIntake(rec: IntakeProgramme): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('intake_programmes').upsert({ id: rec.id, quarter: rec.quarter, program_number: rec.programNumber, domain: rec.domain, quantity: rec.quantity, status: rec.status, start_date: rec.startDate ?? null, note: rec.note ?? null }); return; }
+  }
+  const all = read<IntakeProgramme[]>(K.intake, []);
+  const i = all.findIndex((x) => x.id === rec.id);
+  if (i >= 0) all[i] = rec; else all.push(rec);
+  write(K.intake, all);
+}
+export async function deleteIntake(id: string): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('intake_programmes').delete().eq('id', id); return; }
+  }
+  write(K.intake, read<IntakeProgramme[]>(K.intake, []).filter((i) => i.id !== id));
 }
 
 // ---------------------------------------------------------------------------

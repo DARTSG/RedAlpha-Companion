@@ -109,3 +109,41 @@ create policy "members read (signed in)" on public.staff_members
 
 create policy "members write (admin)" on public.staff_members
   for all using (public.is_staff_admin()) with check (public.is_staff_admin());
+
+-- ===========================================================================
+-- Interviews + Intake pipeline (staff-managed)
+-- ===========================================================================
+create or replace function public.is_staff()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (select 1 from public.staff_members
+    where lower(email) = lower(auth.jwt() ->> 'email') and status = 'active');
+$$;
+
+create table if not exists public.interviews (
+  id uuid primary key default gen_random_uuid(),
+  student_id text not null,
+  company text not null,
+  role text,
+  date date,
+  outcome text not null default 'scheduled' check (outcome in ('scheduled','passed','rejected','pending')),
+  notes text,
+  created_at timestamptz not null default now()
+);
+alter table public.interviews enable row level security;
+create policy "interviews staff read"  on public.interviews for select using (public.is_staff());
+create policy "interviews staff write" on public.interviews for all    using (public.is_staff()) with check (public.is_staff());
+
+create table if not exists public.intake_programmes (
+  id uuid primary key default gen_random_uuid(),
+  quarter text not null,
+  program_number text not null,
+  domain text not null,
+  quantity int not null default 0,
+  status text not null default 'tbc' check (status in ('tbc','confirmed','started')),
+  start_date text,
+  note text,
+  created_at timestamptz not null default now()
+);
+alter table public.intake_programmes enable row level security;
+create policy "intake staff read"  on public.intake_programmes for select using (public.is_staff());
+create policy "intake staff write" on public.intake_programmes for all    using (public.is_staff()) with check (public.is_staff());

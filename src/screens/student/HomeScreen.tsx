@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
+import { Animated, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { ProfileScreen } from './ProfileScreen';
@@ -270,6 +270,10 @@ export function HomeScreen() {
   const [showProfile, setShowProfile] = useState(false);
 
   function handleSignOut() {
+    if (Platform.OS === 'web') {
+      if (typeof window === 'undefined' || window.confirm('Sign out?')) signOut();
+      return;
+    }
     Alert.alert('Sign out', 'Sign out of the demo account?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign out', style: 'destructive', onPress: signOut },

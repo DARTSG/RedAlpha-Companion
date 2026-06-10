@@ -34,6 +34,9 @@ import {
   CohortGrowthPoint,
   Course,
   CourseTrack,
+  IntakeProgramme,
+  IntakeStatus,
+  InterviewRecord,
   PlacementRecord,
   StaffMember,
   StaffRole,
@@ -330,6 +333,7 @@ const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
   { id: 'growth',    label: 'Growth',    icon: 'trending' },
   { id: 'news',      label: 'News',      icon: 'bell' },
+  { id: 'intake',    label: 'Intake',    icon: 'calendar' },
   { id: 'manage',    label: 'Manage',    icon: 'settings' },
   { id: 'users',     label: 'Users',     icon: 'shield' },
 ];
@@ -397,16 +401,39 @@ const sb = StyleSheet.create({
 // Top bar
 // ---------------------------------------------------------------------------
 
-function TopBar({ title, subtitle, userName }: { title: string; subtitle?: string; userName: string }) {
+function TopBar({ title, subtitle, userName, userEmail, userRole, onSignOut }: {
+  title: string; subtitle?: string; userName: string; userEmail?: string; userRole?: string; onSignOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
   return (
     <View style={tb.root}>
       <View>
         <Text style={tb.title}>{title}</Text>
         {subtitle ? <Text style={tb.sub}>{subtitle}</Text> : null}
       </View>
-      <View style={tb.userChip}>
-        <View style={tb.uAvatar}><Text style={tb.uAvatarText}>{userName.charAt(0).toUpperCase()}</Text></View>
-        <Text style={tb.uName} numberOfLines={1}>{userName}</Text>
+      <View style={{ position: 'relative' }}>
+        <TouchableOpacity style={tb.userChip} onPress={() => setOpen((o) => !o)} {...({ dataSet: { btn: '1' } } as any)}>
+          <View style={tb.uAvatar}><Text style={tb.uAvatarText}>{userName.charAt(0).toUpperCase()}</Text></View>
+          <Text style={tb.uName} numberOfLines={1}>{userName}</Text>
+          <View {...({ dataSet: { chevron: '1' } } as any)} style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}>
+            <Icon name="chevron" size={13} color={C.textMute} />
+          </View>
+        </TouchableOpacity>
+        {open && (
+          <>
+            <TouchableOpacity activeOpacity={1} onPress={() => setOpen(false)} style={tb.overlay as any} />
+            <View style={tb.menu} {...({ dataSet: { card: '1' } } as any)}>
+              <Text style={tb.menuName}>{userName}</Text>
+              {userEmail ? <Text style={tb.menuMeta}>{userEmail}</Text> : null}
+              {userRole ? <View style={tb.roleTag}><Text style={tb.roleTagText}>{userRole}</Text></View> : null}
+              <View style={{ height: 1, backgroundColor: C.borderSoft, marginVertical: 10 }} />
+              <TouchableOpacity style={tb.menuItem} onPress={() => { setOpen(false); onSignOut(); }} {...({ dataSet: { btn: '1' } } as any)}>
+                <Icon name="logout" size={15} color={C.brand} />
+                <Text style={tb.menuItemText}>Sign out</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </View>
     </View>
   );
@@ -420,6 +447,14 @@ const tb = StyleSheet.create({
   uAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.text, alignItems: 'center', justifyContent: 'center' },
   uAvatarText: { color: '#fff', fontSize: 11.5, fontWeight: '700' },
   uName: { fontSize: 13, fontWeight: '600', color: C.textMid, maxWidth: 180 },
+  overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 },
+  menu: { position: 'absolute', top: 44, right: 0, minWidth: 220, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, zIndex: 50 },
+  menuName: { fontSize: 13.5, fontWeight: '700', color: C.text },
+  menuMeta: { fontSize: 12, color: C.textMute, marginTop: 2 },
+  roleTag: { alignSelf: 'flex-start', marginTop: 8, backgroundColor: C.slateSoft, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12 },
+  roleTagText: { fontSize: 11, fontWeight: '700', color: C.textMid, textTransform: 'capitalize' },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 8, paddingHorizontal: 6, borderRadius: 8 },
+  menuItemText: { fontSize: 13, fontWeight: '600', color: C.text },
 });
 
 // ---------------------------------------------------------------------------
@@ -590,6 +625,13 @@ const PSTATUS: Record<PlacementRecord['status'], { label: string; fg: string; bg
   terminated: { label: 'Let go', fg: '#B42318', bg: '#FEF3F2' },
 };
 
+const IV_OUTCOME: Record<InterviewRecord['outcome'], { label: string; fg: string; bg: string }> = {
+  scheduled: { label: 'Scheduled', fg: C.blue, bg: C.blueSoft },
+  pending: { label: 'Pending', fg: C.amber, bg: C.amberSoft },
+  passed: { label: 'Passed', fg: C.green, bg: C.greenSoft },
+  rejected: { label: 'Rejected', fg: '#B42318', bg: '#FEF3F2' },
+};
+
 function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStudentRecord) => void }) {
   const [open, setOpen] = useState(false);
   const grown = useGrow();
@@ -607,9 +649,23 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
     else if (!active) { bondLeftLabel = 'Paused'; bondLeftColor = C.amber; }
     else { const days = Math.max(0, Math.round((s.bondMonths - served) * 30.44)); bondLeftLabel = `${days}d`; bondLeftColor = days < 90 ? C.amber : C.textMid; }
   }
+  const [interviews, setInterviews] = useState<InterviewRecord[]>([]);
+  const [ivLoaded, setIvLoaded] = useState(false);
+  const [ivCompany, setIvCompany] = useState('');
+  const [ivRole, setIvRole] = useState('');
+  const [ivDate, setIvDate] = useState('');
+  const [ivOutcome, setIvOutcome] = useState<InterviewRecord['outcome']>('scheduled');
+  const [ivNotes, setIvNotes] = useState('');
+  function loadInterviews() { mgmt.fetchInterviews(s.studentId).then(setInterviews).catch(() => setInterviews([])); setIvLoaded(true); }
+  function addInterview() {
+    if (!ivCompany.trim()) return;
+    const rec: InterviewRecord = { id: mgmt.newId(), studentId: s.studentId, company: ivCompany.trim(), role: ivRole.trim() || undefined, date: ivDate || new Date().toISOString().slice(0, 10), outcome: ivOutcome, notes: ivNotes.trim() || undefined };
+    mgmt.saveInterview(rec).then(() => { setIvCompany(''); setIvRole(''); setIvDate(''); setIvNotes(''); setIvOutcome('scheduled'); loadInterviews(); });
+  }
+  function removeInterview(id: string) { mgmt.deleteInterview(id).then(loadInterviews); }
   return (
     <View style={{ borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
-      <TouchableOpacity activeOpacity={0.7} onPress={() => setOpen((o) => !o)} {...({ dataSet: { row: '1' } } as any)} style={tbl.row}>
+      <TouchableOpacity activeOpacity={0.7} onPress={() => { const n = !open; setOpen(n); if (n && !ivLoaded) loadInterviews(); }} {...({ dataSet: { row: '1' } } as any)} style={tbl.row}>
         <View style={{ width: 22, alignItems: 'center' }}>
           <View {...({ dataSet: { chevron: '1' } } as any)} style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}>
             <Icon name="chevron" size={15} color={C.textMute} />
@@ -704,6 +760,43 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
                 <Text style={tbl.cvBtnText}>Download CV</Text>
               </TouchableOpacity>
             ) : <Text style={[tbl.meta, { marginTop: 10 }]}>No CV uploaded.</Text>}
+          </View>
+
+          <View style={{ flexBasis: '100%', borderTopWidth: 1, borderTopColor: C.borderSoft, paddingTop: 14 }}>
+            <Text style={tbl.panelLabel}>Interviews</Text>
+            {interviews.length === 0 ? <Text style={tbl.meta}>No interviews logged yet.</Text> : (
+              <View style={{ gap: 8, marginBottom: 12 }}>
+                {interviews.map((iv) => {
+                  const oc = IV_OUTCOME[iv.outcome];
+                  return (
+                    <View key={iv.id} style={tbl.ivRow}>
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Text style={tbl.histCompany}>{iv.company}</Text>
+                          <View style={[tbl.pStatus, { backgroundColor: oc.bg }]}><Text style={[tbl.pStatusText, { color: oc.fg }]}>{oc.label}</Text></View>
+                        </View>
+                        <Text style={tbl.meta}>{[iv.role, iv.date].filter(Boolean).join(' \u00b7 ')}{iv.notes ? `  \u2014  ${iv.notes}` : ''}</Text>
+                      </View>
+                      <TouchableOpacity onPress={() => removeInterview(iv.id)} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={13} color="#B42318" /></TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+            <View style={tbl.ivForm}>
+              <TextInput style={[em.input as any, tbl.ivInput]} value={ivCompany} onChangeText={setIvCompany} placeholder="Company" placeholderTextColor="#C2C9D6" />
+              <TextInput style={[em.input as any, tbl.ivInput]} value={ivRole} onChangeText={setIvRole} placeholder="Role" placeholderTextColor="#C2C9D6" />
+              <TextInput style={[em.input as any, tbl.ivInput, { maxWidth: 130 }]} value={ivDate} onChangeText={setIvDate} placeholder="YYYY-MM-DD" placeholderTextColor="#C2C9D6" />
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {(Object.keys(IV_OUTCOME) as InterviewRecord['outcome'][]).map((o) => (
+                  <TouchableOpacity key={o} onPress={() => setIvOutcome(o)} style={[tbl.ivPill, ivOutcome === o && { backgroundColor: IV_OUTCOME[o].bg, borderColor: IV_OUTCOME[o].fg }]} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Text style={[tbl.ivPillText, ivOutcome === o && { color: IV_OUTCOME[o].fg }]}>{IV_OUTCOME[o].label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TextInput style={[em.input as any, tbl.ivInput, { flex: 1, minWidth: 160 }]} value={ivNotes} onChangeText={setIvNotes} placeholder="Notes (optional)" placeholderTextColor="#C2C9D6" />
+              <TouchableOpacity onPress={addInterview} style={mst.primaryBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={13} color="#fff" /><Text style={mst.primaryBtnText}>Add</Text></TouchableOpacity>
+            </View>
           </View>
         </View>
       )}
@@ -970,6 +1063,11 @@ const tbl = StyleSheet.create({
   pStatus: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12 },
   pStatusText: { fontSize: 10.5, fontWeight: '700' },
   bondBar: { height: 10, backgroundColor: C.borderSoft, borderRadius: 5, overflow: 'hidden', marginTop: 8 },
+  ivRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FBFCFE', borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 10 },
+  ivForm: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+  ivInput: { paddingVertical: 7, minWidth: 120 },
+  ivPill: { paddingHorizontal: 9, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: C.border },
+  ivPillText: { fontSize: 11.5, fontWeight: '600', color: C.textMid },
   panelLabel: { fontSize: 11, fontWeight: '700', color: C.textMute, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 },
   certRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   certIcon: { width: 30, height: 30, borderRadius: 8, backgroundColor: C.violetSoft, alignItems: 'center', justifyContent: 'center' },
@@ -1590,6 +1688,10 @@ function WebUsers() {
   const [iName, setIName] = useState(''); const [iEmail, setIEmail] = useState(''); const [iRole, setIRole] = useState<StaffRole>('staff');
   function invite() { if (!iEmail.trim()) return; mgmt.inviteMemberAsync(iEmail, iRole, iName).then(() => { setIName(''); setIEmail(''); setTick((t) => t + 1); }); }
   function changeRole(m: StaffMember, r: StaffRole) { mgmt.upsertMember({ ...m, role: r }).then(() => setTick((t) => t + 1)); }
+  function demote(m: StaffMember) {
+    const ok = typeof window === 'undefined' ? true : window.confirm(`Make ${m.name || m.email} a student? They'll lose staff access.`);
+    if (ok) mgmt.removeMember(m.id).then(() => setTick((t) => t + 1));
+  }
   function accept(m: StaffMember) { mgmt.upsertMember({ ...m, status: 'active' }).then(() => setTick((t) => t + 1)); }
   function remove(id: string) { mgmt.removeMember(id).then(() => setTick((t) => t + 1)); }
   const adminsN = members.filter((m) => m.status === 'active' && m.role === 'admin').length;
@@ -1618,12 +1720,15 @@ function WebUsers() {
                 <Avatar name={m.name} size={32} />
                 <View><Text style={tbl.name}>{m.name}</Text><Text style={tbl.meta}>{m.email}</Text></View>
               </View>
-              <View style={[tbl.cell, { flex: 1.4, flexDirection: 'row', gap: 6 }]}>
+              <View style={[tbl.cell, { flex: 1.4, flexDirection: 'row', gap: 6, flexWrap: 'wrap' }]}>
                 {(['admin', 'staff'] as StaffRole[]).map((r) => (
                   <TouchableOpacity key={r} onPress={() => changeRole(m, r)} style={[mst.trackPick, m.role === r && { borderColor: r === 'admin' ? C.brand : C.blue, backgroundColor: (r === 'admin' ? C.brand : C.blue) + '18' }]} {...({ dataSet: { btn: '1' } } as any)}>
                     <Text style={[mst.trackPickText, m.role === r && { color: r === 'admin' ? C.brand : C.blue }]}>{r}</Text>
                   </TouchableOpacity>
                 ))}
+                <TouchableOpacity onPress={() => demote(m)} style={mst.trackPick} {...({ dataSet: { btn: '1' } } as any)}>
+                  <Text style={mst.trackPickText}>student</Text>
+                </TouchableOpacity>
               </View>
               <View style={tbl.cell}>
                 <View style={[tbl.pStatus, { backgroundColor: m.status === 'active' ? C.greenSoft : C.amberSoft, alignSelf: 'flex-start' }]}>
@@ -1657,11 +1762,122 @@ function WebUsers() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Intake — upcoming programmes / recruitment pipeline
+// ---------------------------------------------------------------------------
+
+const INTAKE_STATUS: Record<IntakeStatus, { label: string; fg: string; bg: string }> = {
+  tbc: { label: 'TBC', fg: C.slate, bg: C.slateSoft },
+  confirmed: { label: 'Confirmed', fg: C.blue, bg: C.blueSoft },
+  started: { label: 'Started', fg: C.green, bg: C.greenSoft },
+};
+const INTAKE_TARGET = 250;
+
+function WebIntake() {
+  const [rows, setRows] = useState<IntakeProgramme[]>([]);
+  const [tick, setTick] = useState(0);
+  useEffect(() => { mgmt.fetchIntake().then(setRows).catch(() => setRows([])); }, [tick]);
+
+  const [q, setQ] = useState('Q1');
+  const [prog, setProg] = useState('');
+  const [domain, setDomain] = useState('CYBER');
+  const [qty, setQty] = useState('10');
+  const [st, setSt] = useState<IntakeStatus>('confirmed');
+  const [start, setStart] = useState('');
+  const [note, setNote] = useState('');
+
+  function add() {
+    if (!prog.trim()) return;
+    mgmt.saveIntake({ id: mgmt.newId(), quarter: q, programNumber: prog.trim(), domain: domain.trim() || 'CYBER', quantity: Number(qty) || 0, status: st, startDate: start.trim() || undefined, note: note.trim() || undefined })
+      .then(() => { setProg(''); setStart(''); setNote(''); setTick((t) => t + 1); });
+  }
+  function setStatus(r: IntakeProgramme, status: IntakeStatus) { mgmt.saveIntake({ ...r, status }).then(() => setTick((t) => t + 1)); }
+  function remove(id: string) { mgmt.deleteIntake(id).then(() => setTick((t) => t + 1)); }
+
+  const started = rows.filter((r) => r.status === 'started').reduce((n, r) => n + r.quantity, 0);
+  const confirmed = rows.filter((r) => r.status === 'confirmed').reduce((n, r) => n + r.quantity, 0);
+  const totalPlanned = started + confirmed;
+  const needToPlan = Math.max(0, INTAKE_TARGET - totalPlanned);
+
+  return (
+    <Page>
+      <View style={u.kpiRow}>
+        <KpiCard label="Started" value={started} icon="cap" tint={C.green} soft={C.greenSoft} />
+        <KpiCard label="Confirmed" value={confirmed} icon="calendar" tint={C.blue} soft={C.blueSoft} />
+        <KpiCard label="Total Planned" value={totalPlanned} icon="users" tint={C.slate} soft={C.slateSoft} />
+        <KpiCard label={`Need to Plan (of ${INTAKE_TARGET})`} value={needToPlan} icon="trending" tint={C.amber} soft={C.amberSoft} />
+      </View>
+
+      <View style={u.colsWrap}>
+        <Card style={{ flex: 2.4, minWidth: 420, padding: 0, overflow: 'hidden' }} anim>
+          <View style={{ padding: 20, paddingBottom: 0 }}><CardTitle right={<Text style={tbl.meta}>{rows.length} programmes</Text>}>Upcoming Programmes</CardTitle></View>
+          <View style={tbl.thead}>
+            <Text style={tbl.th}>Quarter</Text>
+            <Text style={[tbl.th, { flex: 1.4 }]}>Program</Text>
+            <Text style={tbl.th}>Domain</Text>
+            <Text style={[tbl.th, { flex: 0.7 }]}>Qty</Text>
+            <Text style={[tbl.th, { flex: 1.7 }]}>Status</Text>
+            <Text style={[tbl.th, { flex: 0.6, textAlign: 'right' }]}> </Text>
+          </View>
+          {rows.length === 0 ? (
+            <View style={{ padding: 28, alignItems: 'center' }}><Text style={tbl.meta}>No programmes planned yet — add one on the right.</Text></View>
+          ) : rows.map((r) => (
+            <View key={r.id} {...({ dataSet: { row: '1' } } as any)} style={[tbl.row, { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
+              <Text style={tbl.cell}>{r.quarter}</Text>
+              <View style={[tbl.cell, { flex: 1.4 }]}>
+                <Text style={tbl.name}>{r.programNumber}</Text>
+                {(r.startDate || r.note) ? <Text style={tbl.meta}>{[r.startDate, r.note].filter(Boolean).join(' · ')}</Text> : null}
+              </View>
+              <Text style={tbl.cell}>{r.domain}</Text>
+              <Text style={[tbl.cell, { flex: 0.7, fontWeight: '700', color: C.text }]}>{r.quantity}</Text>
+              <View style={[tbl.cell, { flex: 1.7, flexDirection: 'row', gap: 5, flexWrap: 'wrap' }]}>
+                {(['tbc', 'confirmed', 'started'] as IntakeStatus[]).map((s2) => (
+                  <TouchableOpacity key={s2} onPress={() => setStatus(r, s2)} style={[tbl.ivPill, r.status === s2 && { backgroundColor: INTAKE_STATUS[s2].bg, borderColor: INTAKE_STATUS[s2].fg }]} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Text style={[tbl.ivPillText, r.status === s2 && { color: INTAKE_STATUS[s2].fg }]}>{INTAKE_STATUS[s2].label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={[tbl.cell, { flex: 0.6, alignItems: 'flex-end' }]}><TouchableOpacity onPress={() => remove(r.id)} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={14} color="#B42318" /></TouchableOpacity></View>
+            </View>
+          ))}
+        </Card>
+
+        <Card style={{ flex: 1, minWidth: 280 }} anim>
+          <CardTitle>Add Programme</CardTitle>
+          <Text style={em.fieldLabel}>Quarter</Text>
+          <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+            {['Q1', 'Q2', 'Q3', 'Q4'].map((qq) => (
+              <TouchableOpacity key={qq} onPress={() => setQ(qq)} style={[mst.trackPick, q === qq && { borderColor: C.brand, backgroundColor: C.brand + '18' }]} {...({ dataSet: { btn: '1' } } as any)}>
+                <Text style={[mst.trackPickText, q === qq && { color: C.brand }]}>{qq}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Field label="Program number" value={prog} onChange={setProg} ph="e.g. ASTP18" />
+          <Field label="Domain" value={domain} onChange={setDomain} ph="e.g. CYBER" />
+          <Field label="Quantity" value={qty} onChange={setQty} ph="10" numeric />
+          <Text style={em.fieldLabel}>Status</Text>
+          <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
+            {(['tbc', 'confirmed', 'started'] as IntakeStatus[]).map((s2) => (
+              <TouchableOpacity key={s2} onPress={() => setSt(s2)} style={[mst.trackPick, st === s2 && { borderColor: INTAKE_STATUS[s2].fg, backgroundColor: INTAKE_STATUS[s2].bg }]} {...({ dataSet: { btn: '1' } } as any)}>
+                <Text style={[mst.trackPickText, st === s2 && { color: INTAKE_STATUS[s2].fg }]}>{INTAKE_STATUS[s2].label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Field label="Start (optional)" value={start} onChange={setStart} ph="e.g. July or 2026-07-01" />
+          <Field label="Note (optional)" value={note} onChange={setNote} ph="e.g. Recruiting" />
+          <TouchableOpacity onPress={add} style={mst.primaryBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={14} color="#fff" /><Text style={mst.primaryBtnText}>Add programme</Text></TouchableOpacity>
+        </Card>
+      </View>
+    </Page>
+  );
+}
+
 const PAGES: Record<string, { title: string; subtitle: string; component: React.ComponentType }> = {
   students:  { title: 'Students',  subtitle: 'Manage student records, certifications and placement info', component: WebStudents },
   dashboard: { title: 'Dashboard', subtitle: 'Overview of cohort health and outcomes',                    component: WebDashboard },
   growth:    { title: 'Growth',    subtitle: 'Enrollment and placement trends over time',                 component: WebGrowth },
   news:      { title: 'News',      subtitle: 'Announcements posted to the community',                      component: WebNews },
+  intake:    { title: 'Intake',    subtitle: 'Upcoming programmes and recruitment pipeline',               component: WebIntake },
   manage:    { title: 'Manage',    subtitle: 'Cohorts, weekly syllabus and upskilling courses',           component: WebManage },
   users:     { title: 'Users',     subtitle: 'Invite teammates and manage admin / staff access',           component: WebUsers },
 };
@@ -1737,7 +1953,7 @@ export function StaffWebPortal() {
       <View style={portal.root}>
         <Sidebar active={safeId} onSelect={(id) => navigate(id)} onSignOut={handleSignOut} userName={userName} items={visibleNav} />
         <View style={portal.main}>
-          <TopBar title={page.title} subtitle={page.subtitle} userName={userName} />
+          <TopBar title={page.title} subtitle={page.subtitle} userName={userName} userEmail={user?.email} userRole={user?.role} onSignOut={handleSignOut} />
           <PageComponent key={safeId} />
         </View>
       </View>

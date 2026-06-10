@@ -198,6 +198,28 @@ export interface StaffStudentRecord {
   bondEndDate?: string;
 }
 
+export interface InterviewRecord {
+  id: string;
+  studentId: string;
+  company: string;
+  role?: string;
+  date: string;          // ISO date
+  outcome: 'scheduled' | 'passed' | 'rejected' | 'pending';
+  notes?: string;
+}
+
+export type IntakeStatus = 'tbc' | 'confirmed' | 'started';
+export interface IntakeProgramme {
+  id: string;
+  quarter: string;        // e.g. "Q1"
+  programNumber: string;  // e.g. "ASTP14"
+  domain: string;         // e.g. "CYBER"
+  quantity: number;
+  status: IntakeStatus;
+  startDate?: string;
+  note?: string;
+}
+
 export interface StudentProfile {
   userId: string;
   fullName: string;
