@@ -18,6 +18,7 @@ import {
   SyllabusWeek,
 } from '@/types';
 import { mockAnnouncements, mockCohorts, mockCourses } from './mockData';
+import { isSupabaseConfigured, getSupabaseClient } from '@/lib/supabase';
 
 const LS: Storage | null = typeof window !== 'undefined' ? window.localStorage : null;
 
@@ -151,26 +152,53 @@ const MEMBERS_SEED: StaffMember[] = [
   { id: 'm-staff2', name: 'Vivian Ng', email: 'vivian.ng@staff.bootcamp.sg', role: 'staff', status: 'active' },
 ];
 
-export function getMembers(): StaffMember[] {
+function mapMemberRow(r: any): StaffMember {
+  return { id: String(r.id), name: r.name ?? '', email: r.email, role: r.role, status: r.status, invitedAt: r.invited_at ?? undefined };
+}
+
+/** Read members from Supabase when configured, else from local storage / seed. */
+export async function fetchMembers(): Promise<StaffMember[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      const { data, error } = await sb.from('staff_members').select('*').order('created_at', { ascending: true });
+      if (!error && Array.isArray(data)) return data.map(mapMemberRow);
+    }
+  }
   return read<StaffMember[] | null>(K.members, null) ?? MEMBERS_SEED;
 }
-export function saveMember(m: StaffMember): StaffMember[] {
-  const list = getMembers().slice();
-  const i = list.findIndex((x) => x.id === m.id);
+
+export async function upsertMember(m: StaffMember): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      await sb.from('staff_members').upsert(
+        { name: m.name, email: m.email.toLowerCase(), role: m.role, status: m.status, invited_at: m.invitedAt ?? null },
+        { onConflict: 'email' }
+      );
+      return;
+    }
+  }
+  const list = (read<StaffMember[] | null>(K.members, null) ?? MEMBERS_SEED).slice();
+  const i = list.findIndex((x) => x.id === m.id || x.email.toLowerCase() === m.email.toLowerCase());
   if (i >= 0) list[i] = m; else list.push(m);
   write(K.members, list);
-  return list;
 }
-export function deleteMember(id: string): StaffMember[] {
-  const list = getMembers().filter((m) => m.id !== id);
+
+export async function removeMember(id: string): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('staff_members').delete().eq('id', id); return; }
+  }
+  const list = (read<StaffMember[] | null>(K.members, null) ?? MEMBERS_SEED).filter((m) => m.id !== id);
   write(K.members, list);
-  return list;
 }
-export function inviteMember(email: string, role: StaffRole, name?: string): StaffMember[] {
+
+export async function inviteMemberAsync(email: string, role: StaffRole, name?: string): Promise<void> {
   const clean = email.trim().toLowerCase();
-  const existing = getMembers().find((m) => m.email.toLowerCase() === clean);
-  if (existing) return saveMember({ ...existing, role });
-  return saveMember({ id: `m-${Date.now()}`, name: name?.trim() || clean.split('@')[0], email: clean, role, status: 'invited', invitedAt: new Date().toISOString() });
+  const existing = (await fetchMembers()).find((m) => m.email.toLowerCase() === clean);
+  if (existing) { await upsertMember({ ...existing, role }); return; }
+  await upsertMember({ id: `m-${Date.now()}`, name: name?.trim() || clean.split('@')[0], email: clean, role, status: 'invited', invitedAt: new Date().toISOString() });
 }
 
 // ---------------------------------------------------------------------------

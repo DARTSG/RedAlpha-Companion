@@ -1586,12 +1586,12 @@ const mst = StyleSheet.create({
 function WebUsers() {
   const [members, setMembers] = useState<StaffMember[]>([]);
   const [tick, setTick] = useState(0);
-  useEffect(() => { setMembers(mgmt.getMembers()); }, [tick]);
+  useEffect(() => { mgmt.fetchMembers().then(setMembers).catch(() => setMembers([])); }, [tick]);
   const [iName, setIName] = useState(''); const [iEmail, setIEmail] = useState(''); const [iRole, setIRole] = useState<StaffRole>('staff');
-  function invite() { if (!iEmail.trim()) return; mgmt.inviteMember(iEmail, iRole, iName); setIName(''); setIEmail(''); setTick((t) => t + 1); }
-  function changeRole(m: StaffMember, r: StaffRole) { mgmt.saveMember({ ...m, role: r }); setTick((t) => t + 1); }
-  function accept(m: StaffMember) { mgmt.saveMember({ ...m, status: 'active' }); setTick((t) => t + 1); }
-  function remove(id: string) { mgmt.deleteMember(id); setTick((t) => t + 1); }
+  function invite() { if (!iEmail.trim()) return; mgmt.inviteMemberAsync(iEmail, iRole, iName).then(() => { setIName(''); setIEmail(''); setTick((t) => t + 1); }); }
+  function changeRole(m: StaffMember, r: StaffRole) { mgmt.upsertMember({ ...m, role: r }).then(() => setTick((t) => t + 1)); }
+  function accept(m: StaffMember) { mgmt.upsertMember({ ...m, status: 'active' }).then(() => setTick((t) => t + 1)); }
+  function remove(id: string) { mgmt.removeMember(id).then(() => setTick((t) => t + 1)); }
   const adminsN = members.filter((m) => m.status === 'active' && m.role === 'admin').length;
   const staffN = members.filter((m) => m.status === 'active' && m.role === 'staff').length;
   const invitedN = members.filter((m) => m.status === 'invited').length;
@@ -1720,10 +1720,9 @@ export function StaffWebPortal() {
   }, []);
 
   function handleSignOut() {
-    Alert.alert('Sign out', 'Sign out of the portal?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign out', style: 'destructive', onPress: signOut },
-    ]);
+    // RN's Alert.alert buttons don't fire on web, so use a native confirm there.
+    const ok = typeof window === 'undefined' ? true : window.confirm('Sign out of the portal?');
+    if (ok) signOut();
   }
 
   const isAdmin = user?.role === 'admin';

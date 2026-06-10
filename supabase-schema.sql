@@ -54,3 +54,53 @@ create policy "Staff can update all profiles"
 -- insert { bucket_id = 'cvs' AND (storage.foldername(name))[1] = auth.uid()::text }
 -- select { bucket_id = 'cvs' AND (storage.foldername(name))[1] = auth.uid()::text }
 -- update { bucket_id = 'cvs' AND (storage.foldername(name))[1] = auth.uid()::text }
+
+-- ===========================================================================
+-- staff_members — admin/staff user management (drives the "Users" tab + roles)
+-- ===========================================================================
+create table if not exists public.staff_members (
+  id uuid primary key default gen_random_uuid(),
+  name text not null default '',
+  email text not null unique,
+  role text not null default 'staff' check (role in ('admin','staff')),
+  status text not null default 'invited' check (status in ('active','invited')),
+  invited_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table public.staff_members enable row level security;
+
+-- INTERIM POLICIES — read/write permitted with the public anon key.
+-- The app currently authenticates users via Microsoft Entra (NOT Supabase Auth),
+-- so DB requests arrive as the anonymous role. These permissive policies make the
+-- Users feature work right now. *** TIGHTEN BEFORE PUBLIC LAUNCH *** by integrating
+-- Entra -> Supabase (JWT) and restricting writes to admins.
+create policy "members readable"  on public.staff_members for select using (true);
+create policy "members insertable" on public.staff_members for insert with check (true);
+create policy "members updatable" on public.staff_members for update using (true) with check (true);
+create policy "members deletable" on public.staff_members for delete using (true);
+
+-- Seed your FIRST admin (edit the email + name; safe to re-run):
+-- insert into public.staff_members (name, email, role, status)
+-- values ('Your Name', 'you@yourcompany.com', 'admin', 'active')
+-- on conflict (email) do update set role = 'admin', status = 'active';
+
+-- ===========================================================================
+-- SECURE member policies — apply ONLY AFTER Supabase Third-Party Auth (Entra) is
+-- enabled AND you've confirmed sign-in + data loading works. This replaces the
+-- interim permissive policies above and restricts WRITES to admins (identified by
+-- the email claim in the Entra ID token). Uncomment and run as one block.
+-- ===========================================================================
+-- drop policy if exists "members readable"  on public.staff_members;
+-- drop policy if exists "members insertable" on public.staff_members;
+-- drop policy if exists "members updatable"  on public.staff_members;
+-- drop policy if exists "members deletable"  on public.staff_members;
+--
+-- create policy "members read (signed in)" on public.staff_members for select
+--   using (auth.jwt() is not null);
+--
+-- create policy "members write (admin only)" on public.staff_members for all
+--   using (exists (select 1 from public.staff_members me
+--                  where lower(me.email) = lower(auth.jwt() ->> 'email') and me.role = 'admin'))
+--   with check (exists (select 1 from public.staff_members me
+--                  where lower(me.email) = lower(auth.jwt() ->> 'email') and me.role = 'admin'));
