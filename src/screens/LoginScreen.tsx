@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import {
   Animated,
   KeyboardAvoidingView,
@@ -33,11 +33,12 @@ const logo = StyleSheet.create({
 });
 
 export function LoginScreen() {
-  const { signInWithMicrosoft, signInWithDemoAccount, isAzureConfigured } = useAuth();
-  const [error, setError] = useState('');
+  const { signInWithMicrosoft, signInWithDemoAccount, isAzureConfigured, authError, isAuthenticating } = useAuth();
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const cardAnim = useRef(new Animated.Value(40)).current;
   const cardOpacity = useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => { if (authError) shake(); }, [authError]);
 
   React.useEffect(() => {
     Animated.parallel([
@@ -55,14 +56,8 @@ export function LoginScreen() {
     ]).start();
   }
 
-  async function handleMicrosoft() {
-    setError('');
-    try {
-      await signInWithMicrosoft();
-    } catch (e: any) {
-      setError(e.message ?? 'Sign-in failed. Please try again.');
-      shake();
-    }
+  function handleMicrosoft() {
+    signInWithMicrosoft();
   }
 
   return (
@@ -91,7 +86,7 @@ export function LoginScreen() {
             <TouchableOpacity
               style={[styles.msBtn, !isAzureConfigured && styles.msBtnDisabled]}
               onPress={handleMicrosoft}
-              disabled={!isAzureConfigured}
+              disabled={!isAzureConfigured || isAuthenticating}
               activeOpacity={0.82}
             >
               <View style={styles.msGrid}>
@@ -100,7 +95,7 @@ export function LoginScreen() {
                 <View style={[styles.msSquare, { backgroundColor: '#00A4EF' }]} />
                 <View style={[styles.msSquare, { backgroundColor: '#FFB900' }]} />
               </View>
-              <Text style={styles.msBtnText}>Continue with Microsoft</Text>
+              <Text style={styles.msBtnText}>{isAuthenticating ? 'Signing in…' : 'Continue with Microsoft'}</Text>
             </TouchableOpacity>
 
             {!isAzureConfigured && (
@@ -111,7 +106,7 @@ export function LoginScreen() {
               </View>
             )}
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {authError ? <Text style={styles.error}>{authError}</Text> : null}
 
             {/* Divider */}
             <View style={styles.divider}>

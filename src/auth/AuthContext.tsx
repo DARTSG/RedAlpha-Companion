@@ -5,7 +5,7 @@ import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import { AuthenticatedUser, StaffMember, UserRole } from '@/types';
 import * as mgmt from '@/data/managementApi';
-import { setSupabaseAccessToken } from '@/lib/supabase';
+import { isSupabaseConfigured, setSupabaseAccessToken } from '@/lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -51,6 +51,8 @@ interface AuthContextValue {
   accessToken: string | null;
   isLoading: boolean;
   isAzureConfigured: boolean;
+  authError: string | null;
+  isAuthenticating: boolean;
   cohortId: string | null;
   profileComplete: boolean;
   signInWithMicrosoft: () => Promise<void>;
@@ -80,6 +82,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [cohortId, setCohortId] = useState<string | null>(null);
   const [profileComplete, setProfileComplete] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   // On web the redirect URI is this page's own URL (so it round-trips back here).
   // On native it's the app's custom scheme.
@@ -91,7 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Authorization Code + PKCE — the flow Entra "Single-page application" expects.
-  const [request, , promptAsync] = AuthSession.useAuthRequest(
+  const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
       clientId: AZURE_AD_CLIENT_ID || 'not-configured',
       scopes: ['openid', 'profile', 'email', 'User.Read', 'offline_access'],
@@ -131,40 +135,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     else await storeDelete(SESSION_STORAGE_KEY);
   }
 
-  async function signInWithMicrosoft() {
-    if (!isAzureConfigured) {
-      throw new Error('Microsoft sign-in is not configured (missing EXPO_PUBLIC_AZURE_AD_CLIENT_ID).');
+  // Trigger the Microsoft sign-in. The result is handled by the effect below so it
+  // works for both popup and redirect flows (no manual button click needed after auth).
+  function signInWithMicrosoft() {
+    setAuthError(null);
+    if (!isAzureConfigured) { setAuthError('Microsoft sign-in is not configured.'); return Promise.resolve(); }
+    setIsAuthenticating(true);
+    return promptAsync().then(() => undefined);
+  }
+
+  // Handle the OAuth response automatically.
+  useEffect(() => {
+    if (!response) return;
+    if (response.type === 'success' && response.params?.code) {
+      completeMicrosoftSignIn(response.params.code).catch((e: any) => {
+        setSupabaseAccessToken(null);
+        setAuthError(e?.message ?? 'Sign-in failed. Please try again.');
+        setIsAuthenticating(false);
+      });
+    } else if (response.type === 'error') {
+      setAuthError(response.error?.message ?? 'Sign-in failed. Please try again.');
+      setIsAuthenticating(false);
+    } else if (response.type === 'cancel' || response.type === 'dismiss') {
+      setIsAuthenticating(false);
     }
-    if (!request) return;
+  }, [response]);
 
-    const result = await promptAsync();
-    if (result.type !== 'success' || !result.params?.code) return;
-
-    // Exchange the authorization code for tokens (PKCE — no client secret).
+  async function completeMicrosoftSignIn(code: string) {
     const tokenResult = await AuthSession.exchangeCodeAsync(
-      {
-        clientId: AZURE_AD_CLIENT_ID,
-        code: result.params.code,
-        redirectUri,
-        extraParams: { code_verifier: request.codeVerifier ?? '' },
-      },
+      { clientId: AZURE_AD_CLIENT_ID, code, redirectUri, extraParams: { code_verifier: request?.codeVerifier ?? '' } },
       discovery
     );
-
     const token = tokenResult.accessToken;
     if (!token) throw new Error('Sign-in failed: no access token returned.');
-    // Entra ID token is the OIDC JWT Supabase Third-Party Auth validates.
     const supabaseToken = tokenResult.idToken ?? null;
     setSupabaseAccessToken(supabaseToken);
+
+    // Reject accounts the backend won't accept (e.g. outside your organization).
+    if (isSupabaseConfigured) {
+      const ok = await mgmt.verifyBackendAccess();
+      if (!ok) throw new Error('This Microsoft account is not authorized for Red Alpha. Please sign in with your organization account.');
+    }
 
     const profileResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!profileResponse.ok) throw new Error('Could not load Microsoft profile.');
+    if (!profileResponse.ok) throw new Error('Could not load your Microsoft profile.');
     const profile = await profileResponse.json();
     const email: string = profile.mail || profile.userPrincipalName || '';
 
-    // Look the user up in the members backend; accept a pending invite on first sign-in.
     const members = await mgmt.fetchMembers().catch(() => [] as StaffMember[]);
     const me = members.find((m) => m.email.toLowerCase() === email.toLowerCase());
     if (me && me.status === 'invited') { await mgmt.upsertMember({ ...me, status: 'active' }); }
@@ -179,6 +198,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setUser(authenticatedUser);
     setAccessToken(token);
+    setAuthError(null);
+    setIsAuthenticating(false);
     await persistSession({ user: authenticatedUser, accessToken: token, supabaseToken });
   }
 
@@ -222,6 +243,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     accessToken,
     isLoading,
     isAzureConfigured,
+    authError,
+    isAuthenticating,
     cohortId,
     profileComplete,
     signInWithMicrosoft,

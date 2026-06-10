@@ -80,10 +80,6 @@ create policy "members insertable" on public.staff_members for insert with check
 create policy "members updatable" on public.staff_members for update using (true) with check (true);
 create policy "members deletable" on public.staff_members for delete using (true);
 
--- Seed your FIRST admin (edit the email + name; safe to re-run):
--- insert into public.staff_members (name, email, role, status)
--- values ('Your Name', 'you@yourcompany.com', 'admin', 'active')
--- on conflict (email) do update set role = 'admin', status = 'active';
 
 -- ===========================================================================
 -- SECURE member policies — apply ONLY AFTER Supabase Third-Party Auth (Entra) is

@@ -194,6 +194,17 @@ export async function removeMember(id: string): Promise<void> {
   write(K.members, list);
 }
 
+/** Returns false when the current user's token is rejected by the backend
+ *  (e.g. an account outside the organization). True when reads succeed or when
+ *  Supabase isn't configured (demo mode). */
+export async function verifyBackendAccess(): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+  const sb = getSupabaseClient();
+  if (!sb) return true;
+  const { error } = await sb.from('staff_members').select('id').limit(1);
+  return !error;
+}
+
 export async function inviteMemberAsync(email: string, role: StaffRole, name?: string): Promise<void> {
   const clean = email.trim().toLowerCase();
   const existing = (await fetchMembers()).find((m) => m.email.toLowerCase() === clean);
