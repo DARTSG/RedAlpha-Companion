@@ -1,4 +1,3 @@
-import Constants from 'expo-constants';
 import * as mgmt from './managementApi';
 import {
   Announcement,
@@ -25,8 +24,7 @@ import {
 // API ADAPTER LAYER — the ONE file to change when connecting to your backend.
 // ---------------------------------------------------------------------------
 
-const config = Constants.expoConfig?.extra ?? {};
-const API_BASE_URL = (config.apiBaseUrl as string) ?? 'https://YOUR-BACKEND-DOMAIN/api';
+const API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? '').trim();
 const SIMULATED_NETWORK_DELAY_MS = 300;
 
 function delay<T>(value: T): Promise<T> {

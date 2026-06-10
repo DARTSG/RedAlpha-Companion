@@ -39,11 +39,5 @@
           "color": "#2563EB"
         }
       ]
-    ],
-    "extra": {
-      "moodleBaseUrl": "https://YOUR-MOODLE-DOMAIN/webservice/rest/server.php",
-      "moodleApiToken": "REPLACE_WITH_MOODLE_TOKEN",
-      "azureAdClientId": "REPLACE_WITH_AZURE_AD_CLIENT_ID",
-      "azureAdTenantId": "REPLACE_WITH_AZURE_AD_TENANT_ID"
-    }
+    ]
   }

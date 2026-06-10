@@ -1,18 +1,15 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
-import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { AuthenticatedUser, UserRole } from '@/types';
 
 WebBrowser.maybeCompleteAuthSession();
 
-const config = Constants.expoConfig?.extra ?? {};
-const AZURE_AD_CLIENT_ID = (config.azureAdClientId as string) ?? '';
-const AZURE_AD_TENANT_ID = (config.azureAdTenantId as string) || 'common';
+const AZURE_AD_CLIENT_ID = (process.env.EXPO_PUBLIC_AZURE_AD_CLIENT_ID ?? '').trim();
+const AZURE_AD_TENANT_ID = (process.env.EXPO_PUBLIC_AZURE_AD_TENANT_ID ?? 'common').trim();
 
-const isAzureConfigured =
-  !!AZURE_AD_CLIENT_ID && !AZURE_AD_CLIENT_ID.startsWith('REPLACE_WITH');
+const isAzureConfigured = Boolean(AZURE_AD_CLIENT_ID);
 
 const discovery = {
   authorizationEndpoint: `https://login.microsoftonline.com/${AZURE_AD_TENANT_ID}/oauth2/v2.0/authorize`,

@@ -9,3 +9,4 @@ ios/
 android/
 .env
 .env*.local
+_docs/
