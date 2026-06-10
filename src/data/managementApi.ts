@@ -113,6 +113,11 @@ export interface PlacementOverride {
   // profile edits
   cohortName?: string;
   dateOfBirth?: string;
+  accountManager?: string;
+  contactNo?: string;
+  personalEmail?: string;
+  dateJoined?: string;
+  ccpGrant?: 'yes' | 'completed' | 'no';
   // legacy convenience mirror of the active placement
   placementCompany?: string;
   placementRole?: string;
@@ -219,6 +224,30 @@ export async function inviteMemberAsync(email: string, role: StaffRole, name?: s
   if (existing) { await upsertMember({ ...existing, role }); return; }
   await upsertMember({ id: `m-${Date.now()}`, name: name?.trim() || clean.split('@')[0], email: clean, role, status: 'invited', invitedAt: new Date().toISOString() });
 }
+
+// ---------------------------------------------------------------------------
+// App settings (key/value) — e.g. the intake target
+// ---------------------------------------------------------------------------
+
+export async function getSetting(key: string, fallback: string): Promise<string> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      const { data, error } = await sb.from('app_settings').select('value').eq('key', key).maybeSingle();
+      if (!error && data && data.value != null) return data.value;
+    }
+  }
+  return read<string | null>('ra.mgmt.setting.' + key, null) ?? fallback;
+}
+export async function setSetting(key: string, value: string): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('app_settings').upsert({ key, value }); return; }
+  }
+  write('ra.mgmt.setting.' + key, value);
+}
+export async function getIntakeTarget(): Promise<number> { return Number(await getSetting('intake_target', '250')) || 250; }
+export async function setIntakeTarget(n: number): Promise<void> { await setSetting('intake_target', String(n)); }
 
 // ---------------------------------------------------------------------------
 // Interviews (per student)

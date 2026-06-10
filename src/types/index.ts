@@ -184,6 +184,12 @@ export interface StaffStudentRecord {
   dateOfBirth?: string;
   cvUrl?: string;
   cvFilename?: string;
+  // Extended profile
+  accountManager?: string;
+  contactNo?: string;
+  personalEmail?: string;
+  dateJoined?: string;
+  ccpGrant?: 'yes' | 'completed' | 'no';
   // Bond: total months of service required before bond is completed.
   // Served time only accrues during active placements (paused while on bench).
   bondMonths?: number;
@@ -224,6 +230,8 @@ export interface StudentProfile {
   userId: string;
   fullName: string;
   email: string;
+  personalEmail?: string;
+  contactNo?: string;
   dateOfBirth: string;
   cohortId: string;
   cohortName: string;

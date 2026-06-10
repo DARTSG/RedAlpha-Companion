@@ -632,6 +632,12 @@ const IV_OUTCOME: Record<InterviewRecord['outcome'], { label: string; fg: string
   rejected: { label: 'Rejected', fg: '#B42318', bg: '#FEF3F2' },
 };
 
+const CCP_CFG: Record<'yes' | 'completed' | 'no', { label: string; fg: string; bg: string }> = {
+  yes: { label: 'Yes', fg: C.green, bg: C.greenSoft },
+  completed: { label: 'Completed', fg: C.blue, bg: C.blueSoft },
+  no: { label: 'No', fg: C.slate, bg: C.slateSoft },
+};
+
 function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStudentRecord) => void }) {
   const [open, setOpen] = useState(false);
   const grown = useGrow();
@@ -744,6 +750,11 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
             <Detail label="Date of birth" value={s.dateOfBirth ?? '—'} />
             <Detail label="Reporting officer" value={active?.reportingOfficer ?? s.reportingOfficer ?? '—'} />
             <Detail label="RO email" value={active?.roEmail ?? s.roEmail ?? '—'} />
+            <Detail label="Account manager" value={s.accountManager ?? '—'} />
+            <Detail label="Contact" value={s.contactNo ?? '—'} />
+            <Detail label="Personal email" value={s.personalEmail ?? '—'} />
+            <Detail label="Date joined" value={s.dateJoined ?? '—'} />
+            <Detail label="CCP grant" value={s.ccpGrant ? CCP_CFG[s.ccpGrant].label : '—'} />
             <Text style={tbl.panelLabel2}>Certifications</Text>
             {s.certifications.length === 0 ? <Text style={tbl.meta}>None yet.</Text> : (
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
@@ -795,7 +806,7 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
                 ))}
               </View>
               <TextInput style={[em.input as any, tbl.ivInput, { flex: 1, minWidth: 160 }]} value={ivNotes} onChangeText={setIvNotes} placeholder="Notes (optional)" placeholderTextColor="#C2C9D6" />
-              <TouchableOpacity onPress={addInterview} style={mst.primaryBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={13} color="#fff" /><Text style={mst.primaryBtnText}>Add</Text></TouchableOpacity>
+              <TouchableOpacity onPress={addInterview} style={tbl.ivAddBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={13} color="#fff" /><Text style={tbl.ivAddText}>Add</Text></TouchableOpacity>
             </View>
           </View>
         </View>
@@ -820,12 +831,18 @@ function WebStudents() {
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState<StudentLifecycleStage | 'all'>(nav.studentFilter?.stage ?? 'all');
   const [cohortFilters, setCohortFilters] = useState<Set<string>>(new Set(nav.studentFilter?.cohort ? [nav.studentFilter.cohort] : []));
+  const [ccpFilter, setCcpFilter] = useState<'all' | 'yes' | 'completed' | 'no'>('all');
   const [editTarget, setEditTarget] = useState<StaffStudentRecord | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [editStage, setEditStage] = useState<StudentLifecycleStage>('on-course');
   const [editCohort, setEditCohort] = useState('');
   const [editDob, setEditDob] = useState('');
+  const [editAcctMgr, setEditAcctMgr] = useState('');
+  const [editContact, setEditContact] = useState('');
+  const [editPersonalEmail, setEditPersonalEmail] = useState('');
+  const [editDateJoined, setEditDateJoined] = useState('');
+  const [editCcp, setEditCcp] = useState<'yes' | 'completed' | 'no' | undefined>(undefined);
   const [editBondMonths, setEditBondMonths] = useState('24');
   const [editPlacements, setEditPlacements] = useState<PlacementRecord[]>([]);
   const [npCompany, setNpCompany] = useState('');
@@ -841,17 +858,19 @@ function WebStudents() {
     if (!students) return [];
     const q = search.toLowerCase();
     return students.filter((s) => {
-      const ms = !q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q);
+      const ms = !q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q) || (s.accountManager ?? '').toLowerCase().includes(q) || (s.personalEmail ?? '').toLowerCase().includes(q) || (s.contactNo ?? '').toLowerCase().includes(q);
       const mst = stageFilter === 'all' || s.stage === stageFilter;
       const mc = cohortFilters.size === 0 || cohortFilters.has(s.cohortName);
-      return ms && mst && mc;
+      const mccp = ccpFilter === 'all' || (s.ccpGrant ?? 'no') === ccpFilter;
+      return ms && mst && mc && mccp;
     });
-  }, [students, search, stageFilter, cohortFilters]);
+  }, [students, search, stageFilter, cohortFilters, ccpFilter]);
 
   const today = () => new Date().toISOString().slice(0, 10);
   function openEdit(s: StaffStudentRecord) {
     setEditTarget(s); setEditStage(s.stage);
     setEditCohort(s.cohortName); setEditDob(s.dateOfBirth ?? '');
+    setEditAcctMgr(s.accountManager ?? ''); setEditContact(s.contactNo ?? ''); setEditPersonalEmail(s.personalEmail ?? ''); setEditDateJoined(s.dateJoined ?? ''); setEditCcp(s.ccpGrant);
     setEditBondMonths(String(s.bondMonths ?? 24));
     const existing: PlacementRecord[] = s.placements ? [...s.placements]
       : (s.placementCompany ? [{ id: 'p-legacy', company: s.placementCompany, role: s.placementRole ?? '', reportingOfficer: s.reportingOfficer, roEmail: s.roEmail, startDate: s.placementStartDate ?? today(), status: (s.stage === 'on-placement' ? 'active' : s.stage === 'bond-completed' ? 'completed' : 'terminated') }] : []);
@@ -876,7 +895,7 @@ function WebStudents() {
     if (!editTarget) return; setSaving(true);
     const act = editPlacements.find((p) => p.status === 'active' && !p.endDate);
     const override = {
-      stage: editStage, cohortName: editCohort, dateOfBirth: editDob || undefined, bondMonths: Number(editBondMonths) || undefined, placements: editPlacements,
+      stage: editStage, cohortName: editCohort, dateOfBirth: editDob || undefined, accountManager: editAcctMgr || undefined, contactNo: editContact || undefined, personalEmail: editPersonalEmail || undefined, dateJoined: editDateJoined || undefined, ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, placements: editPlacements,
       placementCompany: act?.company, placementRole: act?.role,
       reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editTarget.bondEndDate,
     };
@@ -915,6 +934,19 @@ function WebStudents() {
               return (
                 <TouchableOpacity key={c} onPress={() => setCohortFilters((prev) => { const n = new Set(prev); n.has(c) ? n.delete(c) : n.add(c); return n; })} style={[tbl.chip, on && { backgroundColor: C.violet, borderColor: C.violet }]} {...({ dataSet: { btn: '1' } } as any)}>
                   <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{c}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </ScrollView>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
+          <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+            <Text style={{ fontSize: 11, color: C.textMute, fontWeight: '700', marginRight: 2 }}>CCP</Text>
+            {(['all', 'yes', 'completed', 'no'] as const).map((v) => {
+              const on = ccpFilter === v;
+              return (
+                <TouchableOpacity key={v} onPress={() => setCcpFilter(v)} style={[tbl.chip, on && { backgroundColor: C.green, borderColor: C.green }]} {...({ dataSet: { btn: '1' } } as any)}>
+                  <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{v === 'all' ? 'All' : CCP_CFG[v].label}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -977,7 +1009,21 @@ function WebStudents() {
                 ))}
               </View>
               <Text style={em.fieldLabel}>Date of birth</Text>
-              <TextInput style={[em.input as any, { marginBottom: 22, maxWidth: 180 }]} value={editDob} onChangeText={setEditDob} placeholder="YYYY-MM-DD" placeholderTextColor="#C2C9D6" />
+              <TextInput style={[em.input as any, { marginBottom: 18, maxWidth: 180 }]} value={editDob} onChangeText={setEditDob} placeholder="YYYY-MM-DD" placeholderTextColor="#C2C9D6" />
+
+              <Text style={em.section}>Profile Details</Text>
+              <Field label="Account Manager" value={editAcctMgr} onChange={setEditAcctMgr} ph="e.g. Kelly Tan" />
+              <Field label="Contact No" value={editContact} onChange={setEditContact} ph="+65 ..." />
+              <Field label="Personal Email" value={editPersonalEmail} onChange={setEditPersonalEmail} ph="name@gmail.com" />
+              <Field label="Date Joined" value={editDateJoined} onChange={setEditDateJoined} ph="YYYY-MM-DD" />
+              <Text style={em.fieldLabel}>CCP Grant</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+                {(['yes', 'completed', 'no'] as const).map((v) => (
+                  <TouchableOpacity key={v} onPress={() => setEditCcp(v)} style={[em.stage, editCcp === v && { backgroundColor: CCP_CFG[v].bg, borderColor: CCP_CFG[v].fg }]} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Text style={[em.stageText, editCcp === v && { color: CCP_CFG[v].fg }]}>{CCP_CFG[v].label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
               <Text style={em.section}>Bond length (months)</Text>
               <TextInput style={[em.input as any, { marginBottom: 22, maxWidth: 140 }]} value={editBondMonths} onChangeText={setEditBondMonths} keyboardType="numeric" placeholder="24" placeholderTextColor="#C2C9D6" />
@@ -1068,6 +1114,8 @@ const tbl = StyleSheet.create({
   ivInput: { paddingVertical: 7, minWidth: 120 },
   ivPill: { paddingHorizontal: 9, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: C.border },
   ivPillText: { fontSize: 11.5, fontWeight: '600', color: C.textMid },
+  ivAddBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.brand, paddingVertical: 9, paddingHorizontal: 14, borderRadius: 8 },
+  ivAddText: { fontSize: 12.5, fontWeight: '700', color: '#fff' },
   panelLabel: { fontSize: 11, fontWeight: '700', color: C.textMute, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 },
   certRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   certIcon: { width: 30, height: 30, borderRadius: 8, backgroundColor: C.violetSoft, alignItems: 'center', justifyContent: 'center' },
@@ -1771,12 +1819,19 @@ const INTAKE_STATUS: Record<IntakeStatus, { label: string; fg: string; bg: strin
   confirmed: { label: 'Confirmed', fg: C.blue, bg: C.blueSoft },
   started: { label: 'Started', fg: C.green, bg: C.greenSoft },
 };
-const INTAKE_TARGET = 250;
-
 function WebIntake() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [rows, setRows] = useState<IntakeProgramme[]>([]);
+  const [target, setTarget] = useState(250);
   const [tick, setTick] = useState(0);
   useEffect(() => { mgmt.fetchIntake().then(setRows).catch(() => setRows([])); }, [tick]);
+  useEffect(() => { mgmt.getIntakeTarget().then(setTarget).catch(() => {}); }, []);
+  function editTarget() {
+    if (typeof window === 'undefined') return;
+    const v = window.prompt('Annual intake target (total people to plan):', String(target));
+    if (v && !Number.isNaN(Number(v))) { const n = Number(v); mgmt.setIntakeTarget(n).then(() => setTarget(n)); }
+  }
 
   const [q, setQ] = useState('Q1');
   const [prog, setProg] = useState('');
@@ -1797,7 +1852,7 @@ function WebIntake() {
   const started = rows.filter((r) => r.status === 'started').reduce((n, r) => n + r.quantity, 0);
   const confirmed = rows.filter((r) => r.status === 'confirmed').reduce((n, r) => n + r.quantity, 0);
   const totalPlanned = started + confirmed;
-  const needToPlan = Math.max(0, INTAKE_TARGET - totalPlanned);
+  const needToPlan = Math.max(0, target - totalPlanned);
 
   return (
     <Page>
@@ -1805,8 +1860,16 @@ function WebIntake() {
         <KpiCard label="Started" value={started} icon="cap" tint={C.green} soft={C.greenSoft} />
         <KpiCard label="Confirmed" value={confirmed} icon="calendar" tint={C.blue} soft={C.blueSoft} />
         <KpiCard label="Total Planned" value={totalPlanned} icon="users" tint={C.slate} soft={C.slateSoft} />
-        <KpiCard label={`Need to Plan (of ${INTAKE_TARGET})`} value={needToPlan} icon="trending" tint={C.amber} soft={C.amberSoft} />
+        <KpiCard label={`Need to Plan (of ${target})`} value={needToPlan} icon="trending" tint={C.amber} soft={C.amberSoft} />
       </View>
+
+      {isAdmin && (
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <TouchableOpacity onPress={editTarget} style={tbl.iconBtn} {...({ dataSet: { btn: '1' } } as any)}>
+            <Icon name="edit" size={13} color={C.textMid} /><Text style={tbl.iconBtnText}>Edit target</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <View style={u.colsWrap}>
         <Card style={{ flex: 2.4, minWidth: 420, padding: 0, overflow: 'hidden' }} anim>

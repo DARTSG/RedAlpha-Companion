@@ -147,3 +147,13 @@ create table if not exists public.intake_programmes (
 alter table public.intake_programmes enable row level security;
 create policy "intake staff read"  on public.intake_programmes for select using (public.is_staff());
 create policy "intake staff write" on public.intake_programmes for all    using (public.is_staff()) with check (public.is_staff());
+
+-- App settings (key/value): admin-editable config such as the intake target.
+create table if not exists public.app_settings (
+  key text primary key,
+  value text,
+  updated_at timestamptz not null default now()
+);
+alter table public.app_settings enable row level security;
+create policy "settings read"  on public.app_settings for select using (public.is_staff());
+create policy "settings write" on public.app_settings for all    using (public.is_staff_admin()) with check (public.is_staff_admin());
