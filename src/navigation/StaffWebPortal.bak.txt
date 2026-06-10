@@ -1,0 +1,978 @@
+/**
+ * StaffWebPortal — professional web-only admin dashboard for Red Alpha staff.
+ * Rendered exclusively when Platform.OS === 'web'.
+ *
+ * Layout: fixed left sidebar (240 px) + sticky top header + scrollable content area.
+ * Design inspired by DashStack admin UI kit, adapted to Red Alpha brand.
+ */
+
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useAuth } from '@/auth/AuthContext';
+import {
+  fetchAnnouncements,
+  fetchCohortGrowth,
+  fetchStaffStudentRoster,
+} from '@/data/api';
+import { mockGrowth } from '@/data/mockData';
+import {
+  Announcement,
+  CohortGrowthPoint,
+  StaffStudentRecord,
+  StudentLifecycleStage,
+} from '@/types';
+import { getAllStudents, updatePlacementInfo } from '@/data/profileApi';
+import { colors, radius, spacing, typography } from '@/theme';
+
+// ---------------------------------------------------------------------------
+// Design tokens — web-specific refinements
+// ---------------------------------------------------------------------------
+
+const WEB = {
+  sidebarWidth: 210,
+  headerHeight: 64,
+  contentPad: 32,
+  font: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+  cardRadius: 12,
+  cardShadow: '0 1px 3px rgba(0,0,0,0.07), 0 4px 16px rgba(0,0,0,0.04)',
+};
+
+const STAGE_CFG: Record<StudentLifecycleStage, { label: string; color: string; bg: string }> = {
+  'on-course':      { label: 'On Course',    color: '#DC2626', bg: '#FEF2F2' },
+  'job-hunting':    { label: 'Job Hunting',  color: '#D97706', bg: '#FFFBEB' },
+  'on-placement':   { label: 'On Placement', color: '#059669', bg: '#ECFDF5' },
+  'bond-completed': { label: 'Bond Done',    color: '#7C3AED', bg: '#F5F3FF' },
+  withdrawn:        { label: 'Withdrawn',    color: '#9CA3AF', bg: '#F9FAFB' },
+};
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+
+const NAV_ITEMS = [
+  { id: 'students',       label: 'Students',     icon: '◈' },
+  { id: 'dashboard',      label: 'Dashboard',    icon: '▦' },
+  { id: 'certifications', label: 'Certs',        icon: '◉' },
+  { id: 'growth',         label: 'Growth',       icon: '▲' },
+  { id: 'news',           label: 'News',         icon: '◎' },
+];
+
+function Sidebar({ active, onSelect, onSignOut, userName }: {
+  active: string; onSelect: (id: string) => void;
+  onSignOut: () => void; userName: string;
+}) {
+  return (
+    <View style={sb.root}>
+      {/* Brand */}
+      <View style={sb.brand}>
+        <View style={sb.brandMark}>
+          <Text style={sb.brandMarkText}>RA</Text>
+        </View>
+        <View>
+          <Text style={sb.brandName}>Red Alpha</Text>
+          <Text style={sb.brandSub}>Staff Portal</Text>
+        </View>
+      </View>
+
+      <View style={sb.divider} />
+
+      {/* Nav */}
+      <View style={sb.nav}>
+        {NAV_ITEMS.map((item) => {
+          const isActive = active === item.id;
+          return (
+            <TouchableOpacity
+              key={item.id}
+              onPress={() => onSelect(item.id)}
+              activeOpacity={0.7}
+              style={[sb.navItem, isActive && sb.navItemActive]}
+            >
+              {isActive && <View style={sb.activeBar} />}
+              <Text style={[sb.navIcon, isActive && sb.navIconActive]}>{item.icon}</Text>
+              <Text style={[sb.navLabel, isActive && sb.navLabelActive]}>{item.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* Footer */}
+      <View style={sb.footer}>
+        <View style={sb.footerAvatar}>
+          <Text style={sb.footerAvatarText}>{userName.charAt(0).toUpperCase()}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={sb.footerName} numberOfLines={1}>{userName}</Text>
+          <Text style={sb.footerRole}>Staff</Text>
+        </View>
+        <TouchableOpacity onPress={onSignOut} style={sb.signOutBtn}>
+          <Text style={sb.signOutIcon}>⏏</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const sb = StyleSheet.create({
+  root: {
+    width: WEB.sidebarWidth,
+    backgroundColor: '#0F172A',
+    flexDirection: 'column',
+    borderRightWidth: 1,
+    borderRightColor: 'rgba(255,255,255,0.05)',
+  },
+  brand: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20,
+  },
+  brandMark: {
+    width: 36, height: 36, borderRadius: 8,
+    backgroundColor: '#DC2626',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  brandMarkText: { color: '#FFF', fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+  brandName: { color: '#FFF', fontSize: 15, fontWeight: '700', letterSpacing: -0.3 },
+  brandSub: { color: 'rgba(255,255,255,0.35)', fontSize: 11, fontWeight: '500', letterSpacing: 0.5, textTransform: 'uppercase' },
+  divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.06)', marginHorizontal: 20, marginBottom: 12 },
+  nav: { flex: 1, paddingHorizontal: 12 },
+  navItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, paddingHorizontal: 12,
+    borderRadius: 8, marginBottom: 2,
+    position: 'relative',
+  },
+  navItemActive: { backgroundColor: 'rgba(220,38,38,0.12)' },
+  activeBar: {
+    position: 'absolute', left: 0, top: 8, bottom: 8,
+    width: 3, backgroundColor: '#DC2626', borderRadius: 2,
+  },
+  navIcon: { fontSize: 14, opacity: 0.4, width: 20, fontWeight: '600' },
+  navIconActive: { opacity: 1, color: '#DC2626' },
+  navLabel: { fontSize: 14, fontWeight: '500', color: 'rgba(255,255,255,0.45)' },
+  navLabelActive: { color: '#FFF', fontWeight: '600' },
+  footer: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 16, paddingVertical: 16,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)',
+  },
+  footerAvatar: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#DC2626',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  footerAvatarText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
+  footerName: { color: '#FFF', fontSize: 13, fontWeight: '600' },
+  footerRole: { color: 'rgba(255,255,255,0.35)', fontSize: 11 },
+  signOutBtn: { padding: 6, borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.06)' },
+  signOutIcon: { fontSize: 14, color: 'rgba(255,255,255,0.4)' },
+});
+
+// ---------------------------------------------------------------------------
+// Top header
+// ---------------------------------------------------------------------------
+
+function TopHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <View style={hdr.root}>
+      <View>
+        <Text style={hdr.title}>{title}</Text>
+        {subtitle && <Text style={hdr.subtitle}>{subtitle}</Text>}
+      </View>
+    </View>
+  );
+}
+
+const hdr = StyleSheet.create({
+  root: {
+    height: WEB.headerHeight,
+    backgroundColor: '#FFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    paddingHorizontal: WEB.contentPad,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  title: { fontSize: 20, fontWeight: '700', color: '#0F172A', letterSpacing: -0.4 },
+  subtitle: { fontSize: 12, color: '#94A3B8', marginTop: 1, fontWeight: '500' },
+});
+
+// ---------------------------------------------------------------------------
+// Stat card
+// ---------------------------------------------------------------------------
+
+function StatCard({ label, value, icon, color, bg, trend }: {
+  label: string; value: number | string; icon: string;
+  color: string; bg: string; trend?: string;
+}) {
+  return (
+    <View style={sc.card}>
+      <View style={[sc.iconBox, { backgroundColor: bg }]}>
+        <Text style={{ fontSize: 18 }}>{icon}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={sc.label}>{label}</Text>
+        <Text style={[sc.value, { color }]}>{value}</Text>
+      </View>
+      {trend && <Text style={[sc.trend, { color: trend.startsWith('+') ? '#059669' : '#DC2626' }]}>{trend}</Text>}
+    </View>
+  );
+}
+
+const sc = StyleSheet.create({
+  card: {
+    flex: 1, backgroundColor: '#FFF', borderRadius: WEB.cardRadius,
+    padding: 16, flexDirection: 'row', alignItems: 'center', gap: 14,
+    borderWidth: 1, borderColor: '#E8EEF4',
+    minWidth: 180,
+  },
+  iconBox: { width: 44, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  label: { fontSize: 12, color: '#94A3B8', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
+  value: { fontSize: 22, fontWeight: '800', letterSpacing: -0.5 },
+  trend: { fontSize: 12, fontWeight: '700' },
+});
+
+// ---------------------------------------------------------------------------
+// Section heading
+// ---------------------------------------------------------------------------
+
+function SectionHeading({ title, right }: { title: string; right?: React.ReactNode }) {
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+      <Text style={{ fontSize: 15, fontWeight: '700', color: '#0F172A', letterSpacing: -0.2 }}>{title}</Text>
+      {right}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stage badge
+// ---------------------------------------------------------------------------
+
+function StageBadge({ stage }: { stage: StudentLifecycleStage }) {
+  const cfg = STAGE_CFG[stage] ?? STAGE_CFG['on-course'];
+  return (
+    <View style={[badge.root, { backgroundColor: cfg.bg }]}>
+      <Text style={[badge.text, { color: cfg.color }]}>{cfg.label}</Text>
+    </View>
+  );
+}
+
+const badge = StyleSheet.create({
+  root: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, alignSelf: 'flex-start' },
+  text: { fontSize: 11, fontWeight: '700' },
+});
+
+// ---------------------------------------------------------------------------
+// Web Dashboard view
+// ---------------------------------------------------------------------------
+
+function WebDashboard() {
+  const { accessToken } = useAuth();
+  const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+  const [growth, setGrowth] = useState<CohortGrowthPoint[]>([]);
+
+  useEffect(() => {
+    fetchStaffStudentRoster(accessToken).then(setStudents);
+    fetchCohortGrowth(accessToken).then(setGrowth);
+  }, []);
+
+  if (!students) {
+    return <View style={g.centered}><ActivityIndicator color="#DC2626" size="large" /></View>;
+  }
+
+  const counts = {
+    total: students.length,
+    onCourse: students.filter((s) => s.stage === 'on-course').length,
+    placed: students.filter((s) => s.stage === 'on-placement' || s.stage === 'bond-completed').length,
+    hunting: students.filter((s) => s.stage === 'job-hunting').length,
+  };
+  const placementRate = counts.total > 0 ? Math.round((counts.placed / counts.total) * 100) : 0;
+
+  const cohortMap: Record<string, number> = {};
+  students.forEach((s) => { cohortMap[s.cohortName] = (cohortMap[s.cohortName] ?? 0) + 1; });
+  const cohortEntries = Object.entries(cohortMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const maxCount = Math.max(...cohortEntries.map(([, c]) => c), 1);
+
+  return (
+    <ScrollView style={g.scroll} contentContainerStyle={g.pad} showsVerticalScrollIndicator={false}>
+      {/* Stat row */}
+      <View style={[g.row, { gap: 16, marginBottom: 24, flexWrap: 'wrap' }]}>
+        <StatCard label="Total Students" value={counts.total} icon="👥" color="#0F172A" bg="#F8FAFC" />
+        <StatCard label="On Course" value={counts.onCourse} icon="📚" color="#DC2626" bg="#FEF2F2" />
+        <StatCard label="Placed" value={counts.placed} icon="💼" color="#059669" bg="#ECFDF5" />
+        <StatCard label="Job Hunting" value={counts.hunting} icon="🔍" color="#D97706" bg="#FFFBEB" />
+      </View>
+
+      <View style={[g.row, { gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }]}>
+        {/* Placement rate card */}
+        <View style={[g.card, { flex: 1, minWidth: 220 }]}>
+          <SectionHeading title="Placement Rate" />
+          <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+            <Text style={{ fontSize: 56, fontWeight: '800', color: '#059669', letterSpacing: -2 }}>{placementRate}%</Text>
+            <Text style={{ fontSize: 13, color: '#94A3B8', marginTop: 4 }}>
+              {counts.placed} of {counts.total} students placed
+            </Text>
+            <View style={{ width: '100%', height: 8, backgroundColor: '#F1F5F9', borderRadius: 4, marginTop: 16, overflow: 'hidden' }}>
+              <View style={{ width: `${placementRate}%` as any, height: '100%', backgroundColor: '#059669', borderRadius: 4 }} />
+            </View>
+          </View>
+        </View>
+
+        {/* Cohort breakdown */}
+        <View style={[g.card, { flex: 2, minWidth: 300 }]}>
+          <SectionHeading title="Students by Cohort" />
+          {cohortEntries.map(([name, count], i) => {
+            const COLORS = ['#DC2626', '#7C3AED', '#059669', '#D97706', '#0EA5E9', '#6366F1'];
+            const c = COLORS[i % COLORS.length];
+            return (
+              <View key={name} style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#334155' }}>{name}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: c }}>{count}</Text>
+                </View>
+                <View style={{ height: 6, backgroundColor: '#F1F5F9', borderRadius: 3, overflow: 'hidden' }}>
+                  <View style={{ width: `${(count / maxCount) * 100}%` as any, height: '100%', backgroundColor: c, borderRadius: 3 }} />
+                </View>
+              </View>
+            );
+          })}
+        </View>
+
+        {/* Recent students */}
+        <View style={[g.card, { flex: 2, minWidth: 300 }]}>
+          <SectionHeading title="Recent Students" />
+          {students.slice(0, 6).map((s, i) => (
+            <View key={s.studentId} style={[
+              { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+              i < 5 && { borderBottomWidth: 1, borderBottomColor: '#F8FAFC' },
+            ]}>
+              <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: STAGE_CFG[s.stage]?.bg ?? '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: STAGE_CFG[s.stage]?.color ?? '#64748B' }}>
+                  {s.name.charAt(0)}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0F172A' }}>{s.name}</Text>
+                <Text style={{ fontSize: 11, color: '#94A3B8' }}>{s.cohortName}</Text>
+              </View>
+              <StageBadge stage={s.stage} />
+            </View>
+          ))}
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Web Students view (full table)
+// ---------------------------------------------------------------------------
+
+function WebStudents() {
+  const { accessToken } = useAuth();
+  const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+  const [search, setSearch] = useState('');
+  const [stageFilter, setStageFilter] = useState<StudentLifecycleStage | 'all'>('all');
+  const [cohortFilters, setCohortFilters] = useState<Set<string>>(new Set());
+  const [editTarget, setEditTarget] = useState<StaffStudentRecord | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Edit form state
+  const [editStage, setEditStage] = useState<StudentLifecycleStage>('on-course');
+  const [editCompany, setEditCompany] = useState('');
+  const [editRole, setEditRole] = useState('');
+  const [editRO, setEditRO] = useState('');
+  const [editROEmail, setEditROEmail] = useState('');
+  const [editBond, setEditBond] = useState('');
+
+  useEffect(() => { fetchStaffStudentRoster(accessToken).then(setStudents); }, []);
+
+  const cohortOptions = useMemo(() => {
+    if (!students) return [];
+    return Array.from(new Set(students.map((s) => s.cohortName))).sort();
+  }, [students]);
+
+  const filtered = useMemo(() => {
+    if (!students) return [];
+    return students.filter((s) => {
+      const q = search.toLowerCase();
+      const matchSearch = !q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q);
+      const matchStage = stageFilter === 'all' || s.stage === stageFilter;
+      const matchCohort = cohortFilters.size === 0 || cohortFilters.has(s.cohortName);
+      return matchSearch && matchStage && matchCohort;
+    });
+  }, [students, search, stageFilter, cohortFilters]);
+
+  function openEdit(s: StaffStudentRecord) {
+    setEditTarget(s);
+    setEditStage(s.stage);
+    setEditCompany(s.placementCompany ?? '');
+    setEditRole(s.placementRole ?? '');
+    setEditRO(s.reportingOfficer ?? '');
+    setEditROEmail(s.roEmail ?? '');
+    setEditBond(s.bondEndDate ?? '');
+  }
+
+  async function handleSave() {
+    if (!editTarget) return;
+    setSaving(true);
+    try {
+      await updatePlacementInfo(editTarget.studentId, {
+        stage: editStage, placementCompany: editCompany, placementRole: editRole,
+        reportingOfficer: editRO, roEmail: editROEmail, bondEndDate: editBond,
+      });
+      setStudents((prev) => prev?.map((s) =>
+        s.studentId === editTarget.studentId
+          ? { ...s, stage: editStage, placementCompany: editCompany, placementRole: editRole,
+              reportingOfficer: editRO, roEmail: editROEmail, bondEndDate: editBond }
+          : s
+      ) ?? null);
+      setEditTarget(null);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Could not save.');
+    } finally { setSaving(false); }
+  }
+
+  const STAGES: Array<StudentLifecycleStage | 'all'> = ['all', 'on-course', 'job-hunting', 'on-placement', 'bond-completed', 'withdrawn'];
+
+  if (!students) return <View style={g.centered}><ActivityIndicator color="#DC2626" size="large" /></View>;
+
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Filters */}
+      <View style={tbl.filterBar}>
+        {/* Search */}
+        <View style={tbl.searchWrap}>
+          <Text style={tbl.searchIcon}>🔍</Text>
+          <TextInput
+            style={tbl.searchInput}
+            placeholder="Search name or email…"
+            placeholderTextColor="#94A3B8"
+            value={search}
+            onChangeText={setSearch}
+          />
+        </View>
+        {/* Stage pills */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            {STAGES.map((s) => (
+              <TouchableOpacity
+                key={s}
+                style={[tbl.pill, stageFilter === s && tbl.pillActive]}
+                onPress={() => setStageFilter(s)}
+              >
+                <Text style={[tbl.pillText, stageFilter === s && tbl.pillTextActive]}>
+                  {s === 'all' ? 'All stages' : STAGE_CFG[s as StudentLifecycleStage]?.label ?? s}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+        {/* Cohort multi-select */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            {cohortOptions.map((c) => (
+              <TouchableOpacity
+                key={c}
+                style={[tbl.pill, cohortFilters.has(c) && { backgroundColor: '#7C3AED', borderColor: '#7C3AED' }]}
+                onPress={() => setCohortFilters((prev) => {
+                  const next = new Set(prev);
+                  next.has(c) ? next.delete(c) : next.add(c);
+                  return next;
+                })}
+              >
+                <Text style={[tbl.pillText, cohortFilters.has(c) && tbl.pillTextActive]}>{c}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+        <Text style={{ fontSize: 12, color: '#94A3B8', marginLeft: 'auto' as any, flexShrink: 0 }}>
+          {filtered.length} student{filtered.length !== 1 ? 's' : ''}
+        </Text>
+      </View>
+
+      {/* Table */}
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+        <View style={tbl.table}>
+          {/* Header row */}
+          <View style={tbl.thead}>
+            {['Student', 'Cohort', 'Stage', 'Placement', 'Bond End', 'Actions'].map((col) => (
+              <Text key={col} style={[tbl.th, col === 'Student' && { flex: 2 }, col === 'Placement' && { flex: 2 }]}>{col}</Text>
+            ))}
+          </View>
+          {/* Rows */}
+          {filtered.map((s, i) => (
+            <View key={s.studentId} style={[tbl.row, i % 2 === 0 && tbl.rowAlt]}>
+              {/* Student */}
+              <View style={[tbl.cell, { flex: 2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+                <View style={[tbl.avatar, { backgroundColor: STAGE_CFG[s.stage]?.bg ?? '#F1F5F9' }]}>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: STAGE_CFG[s.stage]?.color ?? '#64748B' }}>
+                    {s.name.charAt(0)}
+                  </Text>
+                </View>
+                <View>
+                  <Text style={tbl.cellName}>{s.name}</Text>
+                  <Text style={tbl.cellMeta}>{s.email}</Text>
+                </View>
+              </View>
+              {/* Cohort */}
+              <Text style={tbl.cell}>{s.cohortName}</Text>
+              {/* Stage */}
+              <View style={tbl.cell}><StageBadge stage={s.stage} /></View>
+              {/* Placement */}
+              <View style={[tbl.cell, { flex: 2 }]}>
+                {s.placementCompany ? (
+                  <View>
+                    <Text style={tbl.cellName}>{s.placementRole ?? '—'}</Text>
+                    <Text style={tbl.cellMeta}>{s.placementCompany}</Text>
+                  </View>
+                ) : <Text style={tbl.cellMeta}>—</Text>}
+              </View>
+              {/* Bond */}
+              <Text style={tbl.cell}>{s.bondEndDate ?? '—'}</Text>
+              {/* Actions */}
+              <View style={tbl.cell}>
+                <TouchableOpacity style={tbl.editBtn} onPress={() => openEdit(s)}>
+                  <Text style={tbl.editBtnText}>Edit</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+
+      {/* Edit modal */}
+      <Modal visible={Boolean(editTarget)} animationType="fade" transparent onRequestClose={() => setEditTarget(null)}>
+        <View style={em.backdrop}>
+          <View style={em.sheet}>
+            <View style={em.sheetHeader}>
+              <View>
+                <Text style={em.sheetTitle}>{editTarget?.name}</Text>
+                <Text style={em.sheetSub}>{editTarget?.cohortName} · {editTarget?.email}</Text>
+              </View>
+              <TouchableOpacity onPress={() => setEditTarget(null)} style={em.closeBtn}>
+                <Text style={em.closeText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1, padding: 24 }}>
+              <Text style={em.sectionLabel}>Lifecycle Stage</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+                {(Object.keys(STAGE_CFG) as StudentLifecycleStage[]).map((st) => (
+                  <TouchableOpacity
+                    key={st}
+                    style={[em.stagePill, editStage === st && { backgroundColor: STAGE_CFG[st].color, borderColor: STAGE_CFG[st].color }]}
+                    onPress={() => setEditStage(st)}
+                  >
+                    <Text style={[em.stagePillText, editStage === st && { color: '#FFF' }]}>
+                      {STAGE_CFG[st].label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={em.sectionLabel}>Placement Details</Text>
+              {[
+                { label: 'Company', value: editCompany, set: setEditCompany, placeholder: 'e.g. ST Engineering' },
+                { label: 'Role', value: editRole, set: setEditRole, placeholder: 'e.g. Cybersecurity Analyst' },
+                { label: 'Reporting Officer', value: editRO, set: setEditRO, placeholder: 'Full name' },
+                { label: 'RO Email', value: editROEmail, set: setEditROEmail, placeholder: 'officer@company.com' },
+                { label: 'Bond End Date', value: editBond, set: setEditBond, placeholder: 'YYYY-MM-DD' },
+              ].map((field) => (
+                <View key={field.label} style={{ marginBottom: 14 }}>
+                  <Text style={em.fieldLabel}>{field.label}</Text>
+                  <TextInput
+                    style={em.input}
+                    value={field.value}
+                    onChangeText={field.set}
+                    placeholder={field.placeholder}
+                    placeholderTextColor="#CBD5E1"
+                  />
+                </View>
+              ))}
+            </ScrollView>
+            <View style={em.sheetFooter}>
+              <TouchableOpacity style={em.cancelBtn} onPress={() => setEditTarget(null)}>
+                <Text style={em.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={em.saveBtn} onPress={handleSave} disabled={saving}>
+                <Text style={em.saveText}>{saving ? 'Saving…' : 'Save changes'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const tbl = StyleSheet.create({
+  filterBar: {
+    flexDirection: 'row', gap: 12, alignItems: 'center',
+    paddingHorizontal: WEB.contentPad, paddingVertical: 16,
+    backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#F1F5F9',
+    flexWrap: 'wrap',
+  },
+  searchWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0',
+    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, minWidth: 220,
+  },
+  searchIcon: { fontSize: 13 },
+  searchInput: { fontSize: 13, color: '#0F172A', flex: 1, outlineStyle: 'none' } as any,
+  pill: {
+    paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20,
+    borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFF',
+  },
+  pillActive: { backgroundColor: '#DC2626', borderColor: '#DC2626' },
+  pillText: { fontSize: 12, fontWeight: '600', color: '#64748B' },
+  pillTextActive: { color: '#FFF' },
+  table: { marginHorizontal: WEB.contentPad, marginVertical: 16, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#F1F5F9' },
+  thead: {
+    flexDirection: 'row', backgroundColor: '#F8FAFC',
+    paddingVertical: 12, paddingHorizontal: 16,
+    borderBottomWidth: 1, borderBottomColor: '#F1F5F9',
+  },
+  th: { flex: 1, fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5 },
+  row: { flexDirection: 'row', paddingVertical: 14, paddingHorizontal: 16, alignItems: 'center' },
+  rowAlt: { backgroundColor: '#FAFBFC' },
+  cell: { flex: 1, fontSize: 13, color: '#334155' },
+  cellName: { fontSize: 13, fontWeight: '600', color: '#0F172A' },
+  cellMeta: { fontSize: 11, color: '#94A3B8', marginTop: 1 },
+  avatar: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  editBtn: {
+    paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6,
+    backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#E2E8F0',
+    alignSelf: 'flex-start',
+  },
+  editBtnText: { fontSize: 12, fontWeight: '600', color: '#334155' },
+});
+
+const em = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  sheet: {
+    width: 520, maxHeight: '85%' as any, backgroundColor: '#FFF',
+    borderRadius: 16, overflow: 'hidden', flexDirection: 'column',
+  },
+  sheetHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
+    padding: 24, borderBottomWidth: 1, borderBottomColor: '#F1F5F9',
+  },
+  sheetTitle: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
+  sheetSub: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+  closeBtn: { padding: 6, borderRadius: 8, backgroundColor: '#F8FAFC' },
+  closeText: { fontSize: 14, color: '#64748B' },
+  sectionLabel: { fontSize: 12, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
+  stagePill: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: '#E2E8F0' },
+  stagePillText: { fontSize: 12, fontWeight: '600', color: '#64748B' },
+  fieldLabel: { fontSize: 12, fontWeight: '600', color: '#475569', marginBottom: 5 },
+  input: {
+    borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 9, fontSize: 13, color: '#0F172A',
+    backgroundColor: '#FAFBFC', outlineStyle: 'none',
+  } as any,
+  sheetFooter: {
+    flexDirection: 'row', justifyContent: 'flex-end', gap: 10,
+    padding: 20, borderTopWidth: 1, borderTopColor: '#F1F5F9',
+  },
+  cancelBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  cancelText: { fontSize: 13, fontWeight: '600', color: '#64748B' },
+  saveBtn: { paddingHorizontal: 20, paddingVertical: 8, borderRadius: 8, backgroundColor: '#DC2626' },
+  saveText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+});
+
+// ---------------------------------------------------------------------------
+// Web Certifications view
+// ---------------------------------------------------------------------------
+
+function WebCertifications() {
+  const { accessToken } = useAuth();
+  const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+  const [query, setQuery] = useState('');
+
+  useEffect(() => { fetchStaffStudentRoster(accessToken).then(setStudents); }, []);
+
+  const filtered = useMemo(() => {
+    if (!students) return [];
+    const q = query.toLowerCase();
+    return students.filter((s) =>
+      !q || s.name.toLowerCase().includes(q) || s.certifications.some((c) => c.name.toLowerCase().includes(q))
+    );
+  }, [students, query]);
+
+  if (!students) return <View style={g.centered}><ActivityIndicator color="#DC2626" /></View>;
+
+  const totalCerts = students.reduce((sum, s) => sum + s.certifications.length, 0);
+
+  return (
+    <ScrollView style={g.scroll} contentContainerStyle={g.pad} showsVerticalScrollIndicator={false}>
+      <View style={[g.row, { gap: 16, marginBottom: 24, flexWrap: 'wrap' }]}>
+        <StatCard label="Total Students" value={students.length} icon="👥" color="#0F172A" bg="#F8FAFC" />
+        <StatCard label="Certifications" value={totalCerts} icon="🏅" color="#7C3AED" bg="#F5F3FF" />
+        <StatCard label="Avg per Student" value={students.length ? (totalCerts / students.length).toFixed(1) : 0} icon="📊" color="#059669" bg="#ECFDF5" />
+      </View>
+
+      <View style={g.card}>
+        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+          <View style={tbl.searchWrap}>
+            <Text style={tbl.searchIcon}>🔍</Text>
+            <TextInput style={tbl.searchInput} placeholder="Search students or certs…" placeholderTextColor="#94A3B8" value={query} onChangeText={setQuery} />
+          </View>
+        </View>
+        {/* Table */}
+        <View style={{ borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: '#F1F5F9' }}>
+          <View style={tbl.thead}>
+            {['Student', 'Cohort', 'Stage', 'Certifications'].map((col) => (
+              <Text key={col} style={[tbl.th, col === 'Certifications' && { flex: 3 }]}>{col}</Text>
+            ))}
+          </View>
+          {filtered.map((s, i) => (
+            <View key={s.studentId} style={[tbl.row, i % 2 === 0 && tbl.rowAlt]}>
+              <View style={[tbl.cell, { flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+                <View style={[tbl.avatar, { backgroundColor: STAGE_CFG[s.stage]?.bg ?? '#F1F5F9' }]}>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: STAGE_CFG[s.stage]?.color }}>{s.name.charAt(0)}</Text>
+                </View>
+                <View>
+                  <Text style={tbl.cellName}>{s.name}</Text>
+                  <Text style={tbl.cellMeta}>{s.email}</Text>
+                </View>
+              </View>
+              <Text style={tbl.cell}>{s.cohortName}</Text>
+              <View style={tbl.cell}><StageBadge stage={s.stage} /></View>
+              <View style={[tbl.cell, { flex: 3, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }]}>
+                {s.certifications.length === 0
+                  ? <Text style={tbl.cellMeta}>No certifications</Text>
+                  : s.certifications.map((c) => (
+                    <View key={c.id} style={{ backgroundColor: '#F5F3FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 }}>
+                      <Text style={{ fontSize: 11, color: '#7C3AED', fontWeight: '700' }}>{c.name}</Text>
+                    </View>
+                  ))}
+              </View>
+            </View>
+          ))}
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Web Growth view
+// ---------------------------------------------------------------------------
+
+function WebGrowth() {
+  const { accessToken } = useAuth();
+  const [growth, setGrowth] = useState<CohortGrowthPoint[]>([]);
+
+  useEffect(() => { fetchCohortGrowth(accessToken).then(setGrowth); }, []);
+
+  if (!growth.length) return <View style={g.centered}><ActivityIndicator color="#DC2626" /></View>;
+
+  const maxVal = Math.max(...growth.map((g) => Math.max(g.enrolled, g.graduated, g.placed)), 1);
+  const overall = { enrolled: growth.reduce((s, g) => s + g.enrolled, 0), graduated: growth.reduce((s, g) => s + g.graduated, 0), placed: growth.reduce((s, g) => s + g.placed, 0) };
+
+  return (
+    <ScrollView style={g.scroll} contentContainerStyle={g.pad} showsVerticalScrollIndicator={false}>
+      <View style={[g.row, { gap: 16, marginBottom: 24 }]}>
+        <StatCard label="Total Enrolled" value={overall.enrolled} icon="📋" color="#0F172A" bg="#F8FAFC" />
+        <StatCard label="Graduated" value={overall.graduated} icon="🎓" color="#7C3AED" bg="#F5F3FF" />
+        <StatCard label="Placed" value={overall.placed} icon="💼" color="#059669" bg="#ECFDF5" />
+        <StatCard label="Placement Rate"
+          value={overall.graduated ? `${Math.round(overall.placed / overall.graduated * 100)}%` : '—'}
+          icon="📈" color="#DC2626" bg="#FEF2F2" />
+      </View>
+
+      <View style={[g.row, { gap: 20, alignItems: 'flex-start' }]}>
+        {/* Bar chart */}
+        <View style={[g.card, { flex: 2 }]}>
+          <SectionHeading title="Enrollment by Cohort" />
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 12, height: 180, paddingTop: 20 }}>
+            {growth.map((row) => (
+              <View key={row.cohortName} style={{ flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#DC2626', marginBottom: 4 }}>{row.enrolled}</Text>
+                <View style={{ width: '60%', backgroundColor: '#DC2626', borderRadius: 4, height: `${(row.enrolled / maxVal) * 100}%` as any }} />
+                <Text style={{ fontSize: 10, color: '#94A3B8', marginTop: 6, fontWeight: '600' }}>
+                  {row.cohortName.replace('Cohort ', 'C')}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {/* Cohort table */}
+        <View style={[g.card, { flex: 3 }]}>
+          <SectionHeading title="Cohort Breakdown" />
+          <View style={{ borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: '#F1F5F9' }}>
+            <View style={tbl.thead}>
+              {['Cohort', 'Year', 'Enrolled', 'Graduated', 'Placed', 'Rate'].map((col) => (
+                <Text key={col} style={tbl.th}>{col}</Text>
+              ))}
+            </View>
+            {growth.map((row, i) => {
+              const rate = row.graduated > 0 ? Math.round(row.placed / row.graduated * 100) : null;
+              return (
+                <View key={row.cohortName} style={[tbl.row, i % 2 === 0 && tbl.rowAlt]}>
+                  <Text style={[tbl.cell, { fontWeight: '600', color: '#0F172A' }]}>{row.cohortName}</Text>
+                  <Text style={tbl.cell}>{row.year}</Text>
+                  <Text style={tbl.cell}>{row.enrolled}</Text>
+                  <Text style={tbl.cell}>{row.graduated}</Text>
+                  <Text style={tbl.cell}>{row.placed}</Text>
+                  <Text style={[tbl.cell, { color: rate && rate >= 70 ? '#059669' : '#D97706', fontWeight: '700' }]}>
+                    {rate !== null ? `${rate}%` : '—'}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Web News view
+// ---------------------------------------------------------------------------
+
+function WebNews() {
+  const { accessToken, user } = useAuth();
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchAnnouncements(accessToken).then((a) => { setAnnouncements(a); setLoading(false); });
+  }, []);
+
+  if (loading) return <View style={g.centered}><ActivityIndicator color="#DC2626" /></View>;
+
+  return (
+    <ScrollView style={g.scroll} contentContainerStyle={g.pad} showsVerticalScrollIndicator={false}>
+      <View style={{ maxWidth: 720 }}>
+        {announcements.map((item) => (
+          <View key={item.id} style={[g.card, { marginBottom: 12 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                {item.pinned && (
+                  <View style={{ backgroundColor: '#FEF2F2', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 20 }}>
+                    <Text style={{ fontSize: 11, color: '#DC2626', fontWeight: '700' }}>📌 Pinned</Text>
+                  </View>
+                )}
+                <View style={{ backgroundColor: '#F8FAFC', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 20, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                  <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600', textTransform: 'capitalize' }}>{item.audience}</Text>
+                </View>
+              </View>
+              <Text style={{ fontSize: 11, color: '#94A3B8' }}>
+                {new Date(item.postedAt).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </Text>
+            </View>
+            <Text style={{ fontSize: 15, fontWeight: '700', color: '#0F172A', marginBottom: 6 }}>{item.title}</Text>
+            <Text style={{ fontSize: 13, color: '#475569', lineHeight: 20 }}>{item.body}</Text>
+            {item.author && (
+              <Text style={{ fontSize: 11, color: '#94A3B8', marginTop: 10, fontStyle: 'italic' }}>— {item.author}</Text>
+            )}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page config
+// ---------------------------------------------------------------------------
+
+const PAGES: Record<string, { title: string; subtitle: string; component: React.ComponentType }> = {
+  students:       { title: 'Students',       subtitle: 'Manage student records and placement info', component: WebStudents },
+  dashboard:      { title: 'Dashboard',      subtitle: 'Overview of cohort health and outcomes',   component: WebDashboard },
+  certifications: { title: 'Certifications', subtitle: 'Track certifications across all students',  component: WebCertifications },
+  growth:         { title: 'Growth',         subtitle: 'Enrollment and placement trends over time', component: WebGrowth },
+  news:           { title: 'News',           subtitle: 'Announcements posted to the community',     component: WebNews },
+};
+
+// ---------------------------------------------------------------------------
+// Shared styles
+// ---------------------------------------------------------------------------
+
+const g = StyleSheet.create({
+  scroll: { flex: 1, backgroundColor: '#F8FAFC' },
+  pad: { padding: WEB.contentPad, paddingBottom: 48 },
+  row: { flexDirection: 'row' },
+  card: {
+    backgroundColor: '#FFF', borderRadius: WEB.cardRadius,
+    padding: 24, borderWidth: 1, borderColor: '#F1F5F9',
+    marginBottom: 0,
+  },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F8FAFC' },
+});
+
+// ---------------------------------------------------------------------------
+// Portal root
+// ---------------------------------------------------------------------------
+
+export function StaffWebPortal() {
+  const { user, signOut } = useAuth();
+  const [activeId, setActiveId] = useState('students');
+
+  // Inject Inter font + fix viewport for web
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    // Viewport
+    let meta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement;
+    if (!meta) { meta = document.createElement('meta'); meta.name = 'viewport'; document.head.appendChild(meta); }
+    meta.content = 'width=device-width, initial-scale=1, maximum-scale=1';
+    // Font
+    const style = document.createElement('style');
+    style.id = 'ra-portal-styles';
+    style.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+      body, body * { font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important; }
+      body { margin: 0; overflow: hidden; background: #F8FAFC; }
+      input, textarea { font-family: inherit !important; }
+    `;
+    if (!document.getElementById('ra-portal-styles')) document.head.appendChild(style);
+  }, []);
+
+  function handleSignOut() {
+    Alert.alert('Sign out', 'Sign out of the portal?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign out', style: 'destructive', onPress: signOut },
+    ]);
+  }
+
+  const page = PAGES[activeId] ?? PAGES['students'];
+  const PageComponent = page.component;
+
+  return (
+    <View style={portal.root}>
+      {/* Sidebar */}
+      <Sidebar
+        active={activeId}
+        onSelect={setActiveId}
+        onSignOut={handleSignOut}
+        userName={user?.displayName ?? 'Staff'}
+      />
+
+      {/* Main */}
+      <View style={portal.main}>
+        {/* Top header */}
+        <TopHeader title={page.title} subtitle={page.subtitle} />
+        {/* Content */}
+        <PageComponent />
+      </View>
+    </View>
+  );
+}
+
+const portal = StyleSheet.create({
+  root: { flex: 1, flexDirection: 'row', backgroundColor: '#F8FAFC' },
+  main: { flex: 1, flexDirection: 'column', overflow: 'hidden' as any },
+});

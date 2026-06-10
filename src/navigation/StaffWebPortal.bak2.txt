@@ -1,0 +1,1015 @@
+/**
+ * StaffWebPortal — professional web-only admin dashboard for Red Alpha staff.
+ * Rendered exclusively when Platform.OS === 'web'.
+ *
+ * Design system: Untitled-UI-inspired neutral palette, Inter type scale,
+ * self-contained SVG line icons (no external deps), soft cards, refined tables.
+ */
+
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useAuth } from '@/auth/AuthContext';
+import {
+  fetchAnnouncements,
+  fetchCohortGrowth,
+  fetchStaffStudentRoster,
+} from '@/data/api';
+import { updatePlacementInfo } from '@/data/profileApi';
+import {
+  Announcement,
+  CohortGrowthPoint,
+  StaffStudentRecord,
+  StudentLifecycleStage,
+} from '@/types';
+
+// ---------------------------------------------------------------------------
+// Design tokens
+// ---------------------------------------------------------------------------
+
+const C = {
+  appBg: '#F6F7F9',
+  sidebar: '#101828',
+  sidebarLine: 'rgba(255,255,255,0.08)',
+  card: '#FFFFFF',
+  border: '#E9ECF1',
+  borderSoft: '#F1F3F6',
+  headFill: '#FAFBFC',
+  text: '#101828',
+  textMid: '#475467',
+  textMute: '#8893A4',
+  brand: '#DC2626',
+  brandSoft: '#FEF3F2',
+  green: '#067647', greenSoft: '#ECFDF3',
+  amber: '#B54708', amberSoft: '#FFFAEB',
+  violet: '#6941C6', violetSoft: '#F4F3FF',
+  blue: '#175CD3', blueSoft: '#EFF4FF',
+  slate: '#475467', slateSoft: '#F2F4F7',
+};
+
+const LAYOUT = { sidebar: 188, header: 56, pad: 28, maxW: 1320 };
+
+const STAGE: Record<StudentLifecycleStage, { label: string; fg: string; bg: string; dot: string }> = {
+  'on-course':      { label: 'On Course',    fg: '#B42318', bg: '#FEF3F2', dot: '#F04438' },
+  'job-hunting':    { label: 'Job Hunting',  fg: '#B54708', bg: '#FFFAEB', dot: '#F79009' },
+  'on-placement':   { label: 'On Placement', fg: '#067647', bg: '#ECFDF3', dot: '#17B26A' },
+  'bond-completed': { label: 'Bond Done',    fg: '#6941C6', bg: '#F4F3FF', dot: '#7A5AF8' },
+  withdrawn:        { label: 'Withdrawn',    fg: '#475467', bg: '#F2F4F7', dot: '#98A2B3' },
+};
+
+// ---------------------------------------------------------------------------
+// Self-contained SVG line icons (Lucide-style) — rendered via data URI
+// ---------------------------------------------------------------------------
+
+const ICON_PATHS: Record<string, string> = {
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
+  award: '<circle cx="12" cy="8" r="6"/><path d="M15.5 13.5 17 22l-5-3-5 3 1.5-8.5"/>',
+  trending: '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
+  bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  book: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+  cap: '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2.5 9 2.5 12 0v-5"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  chart: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+};
+
+function Icon({ name, size = 16, color = '#667085', sw = 1.8 }: {
+  name: string; size?: number; color?: string; sw?: number;
+}) {
+  const inner = ICON_PATHS[name] ?? '';
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" ` +
+    `fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+  return (
+    <Image
+      source={{ uri: `data:image/svg+xml,${encodeURIComponent(svg)}` }}
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Donut (placement rate) — SVG data URI ring + centered label
+// ---------------------------------------------------------------------------
+
+function Donut({ pct, size = 132, stroke = 13, color = '#17B26A' }: {
+  pct: number; size?: number; stroke?: number; color?: string;
+}) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const off = c * (1 - Math.max(0, Math.min(100, pct)) / 100);
+  const cx = size / 2;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+    `<circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="#EAECF0" stroke-width="${stroke}"/>` +
+    `<circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" ` +
+    `stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${off}" ` +
+    `transform="rotate(-90 ${cx} ${cx})"/></svg>`;
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Image source={{ uri: `data:image/svg+xml,${encodeURIComponent(svg)}` }}
+        style={{ width: size, height: size, position: 'absolute' }} />
+      <Text style={{ fontSize: 28, fontWeight: '700', color: C.text, letterSpacing: -0.5 }}>{pct}%</Text>
+      <Text style={{ fontSize: 11, color: C.textMute, marginTop: 2, fontWeight: '500' }}>placed</Text>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Reusable bits
+// ---------------------------------------------------------------------------
+
+function StagePill({ stage }: { stage: StudentLifecycleStage }) {
+  const s = STAGE[stage] ?? STAGE['on-course'];
+  return (
+    <View style={[pill.root, { backgroundColor: s.bg }]}>
+      <View style={[pill.dot, { backgroundColor: s.dot }]} />
+      <Text style={[pill.text, { color: s.fg }]} numberOfLines={1}>{s.label}</Text>
+    </View>
+  );
+}
+
+const pill = StyleSheet.create({
+  root: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 16, alignSelf: 'flex-start', flexShrink: 0 },
+  dot: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
+  text: { fontSize: 11.5, fontWeight: '600' },
+});
+
+function Card({ children, style }: { children: React.ReactNode; style?: any }) {
+  return <View {...({ dataSet: { card: '1' } } as any)} style={[u.card, style]}>{children}</View>;
+}
+
+function CardTitle({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <Text style={u.cardTitle}>{children}</Text>
+      {right}
+    </View>
+  );
+}
+
+function Avatar({ name, stage, size = 32 }: { name: string; stage?: StudentLifecycleStage; size?: number }) {
+  const s = stage ? STAGE[stage] : null;
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size / 2,
+      backgroundColor: s?.bg ?? C.slateSoft, alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Text style={{ fontSize: size * 0.4, fontWeight: '700', color: s?.fg ?? C.slate }}>
+        {name.charAt(0).toUpperCase()}
+      </Text>
+    </View>
+  );
+}
+
+function KpiCard({ label, value, icon, tint, soft }: {
+  label: string; value: number | string; icon: string; tint: string; soft: string;
+}) {
+  return (
+    <Card style={kpi.card}>
+      <View style={{ flex: 1, minWidth: 0 } as any}>
+        <Text style={kpi.label} numberOfLines={1}>{label}</Text>
+        <Text style={kpi.value} numberOfLines={1}>{value}</Text>
+      </View>
+      <View style={[kpi.iconBox, { backgroundColor: soft }]}>
+        <Icon name={icon} size={18} color={tint} sw={1.9} />
+      </View>
+    </Card>
+  );
+}
+
+const kpi = StyleSheet.create({
+  card: { flex: 1, flexBasis: 0, minWidth: 140, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  label: { fontSize: 11.5, color: C.textMute, fontWeight: '500', marginBottom: 5 },
+  value: { fontSize: 22, fontWeight: '700', color: C.text, letterSpacing: -0.6 },
+  iconBox: { width: 36, height: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+});
+
+function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (s: string) => void; placeholder: string }) {
+  return (
+    <View style={u.searchWrap}>
+      <Icon name="search" size={15} color={C.textMute} />
+      <TextInput
+        style={u.searchInput as any}
+        placeholder={placeholder}
+        placeholderTextColor={C.textMute}
+        value={value}
+        onChangeText={onChange}
+      />
+    </View>
+  );
+}
+
+function Loader() {
+  return <View style={u.centered}><ActivityIndicator color={C.brand} size="large" /></View>;
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+
+const NAV = [
+  { id: 'students',       label: 'Students',  icon: 'users' },
+  { id: 'dashboard',      label: 'Dashboard', icon: 'grid' },
+  { id: 'certifications', label: 'Certs',     icon: 'award' },
+  { id: 'growth',         label: 'Growth',    icon: 'trending' },
+  { id: 'news',           label: 'News',      icon: 'bell' },
+];
+
+function Sidebar({ active, onSelect, onSignOut, userName }: {
+  active: string; onSelect: (id: string) => void; onSignOut: () => void; userName: string;
+}) {
+  return (
+    <View style={sb.root}>
+      <View style={sb.brand}>
+        <View style={sb.mark}><Text style={sb.markText}>RA</Text></View>
+        <View>
+          <Text style={sb.brandName}>Red Alpha</Text>
+          <Text style={sb.brandSub}>Staff Portal</Text>
+        </View>
+      </View>
+
+      <View style={sb.nav}>
+        {NAV.map((item) => {
+          const on = active === item.id;
+          return (
+            <TouchableOpacity
+              key={item.id}
+              {...({ dataSet: { nav: '1' } } as any)}
+              activeOpacity={0.8}
+              onPress={() => onSelect(item.id)}
+              style={[sb.item, on && sb.itemOn]}
+            >
+              {on && <View style={sb.bar} />}
+              <Icon name={item.icon} size={17} color={on ? '#fff' : 'rgba(255,255,255,0.55)'} sw={1.9} />
+              <Text style={[sb.label, on && sb.labelOn]}>{item.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={sb.footer}>
+        <View style={sb.fAvatar}><Text style={sb.fAvatarText}>{userName.charAt(0).toUpperCase()}</Text></View>
+        <View style={{ flex: 1 }}>
+          <Text style={sb.fName} numberOfLines={1}>{userName}</Text>
+          <Text style={sb.fRole}>Staff</Text>
+        </View>
+        <TouchableOpacity onPress={onSignOut} style={sb.signOut} {...({ dataSet: { nav: '1' } } as any)}>
+          <Icon name="logout" size={15} color="rgba(255,255,255,0.6)" />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const sb = StyleSheet.create({
+  root: { width: LAYOUT.sidebar, backgroundColor: C.sidebar, flexDirection: 'column' },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 18, paddingTop: 20, paddingBottom: 22 },
+  mark: { width: 30, height: 30, borderRadius: 8, backgroundColor: C.brand, alignItems: 'center', justifyContent: 'center' },
+  markText: { color: '#fff', fontSize: 12, fontWeight: '800', letterSpacing: 0.3 },
+  brandName: { color: '#fff', fontSize: 14, fontWeight: '700', letterSpacing: -0.2 },
+  brandSub: { color: 'rgba(255,255,255,0.4)', fontSize: 10.5, fontWeight: '500', letterSpacing: 0.4, marginTop: 1 },
+  nav: { flex: 1, paddingHorizontal: 12 },
+  item: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 9, paddingHorizontal: 11, borderRadius: 8, marginBottom: 3, position: 'relative' },
+  itemOn: { backgroundColor: 'rgba(255,255,255,0.08)' },
+  bar: { position: 'absolute', left: -12, top: 9, bottom: 9, width: 3, backgroundColor: C.brand, borderTopRightRadius: 3, borderBottomRightRadius: 3 },
+  label: { fontSize: 13, fontWeight: '500', color: 'rgba(255,255,255,0.55)' },
+  labelOn: { color: '#fff', fontWeight: '600' },
+  footer: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 14, paddingVertical: 14, borderTopWidth: 1, borderTopColor: C.sidebarLine },
+  fAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.brand, alignItems: 'center', justifyContent: 'center' },
+  fAvatarText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  fName: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  fRole: { color: 'rgba(255,255,255,0.4)', fontSize: 10.5 },
+  signOut: { padding: 7, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.06)' },
+});
+
+// ---------------------------------------------------------------------------
+// Top bar
+// ---------------------------------------------------------------------------
+
+function TopBar({ title, subtitle, userName, scale, onDec, onInc, onReset }: {
+  title: string; subtitle?: string; userName: string;
+  scale: number; onDec: () => void; onInc: () => void; onReset: () => void;
+}) {
+  return (
+    <View style={tb.root}>
+      <View>
+        <Text style={tb.title}>{title}</Text>
+        {subtitle ? <Text style={tb.sub}>{subtitle}</Text> : null}
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={tb.zoom}>
+          <TouchableOpacity onPress={onDec} style={tb.zoomBtn} {...({ dataSet: { btn: '1' } } as any)}><Text style={tb.zoomSign}>-</Text></TouchableOpacity>
+          <TouchableOpacity onPress={onReset}><Text style={tb.zoomVal}>{Math.round(scale * 100)}%</Text></TouchableOpacity>
+          <TouchableOpacity onPress={onInc} style={tb.zoomBtn} {...({ dataSet: { btn: '1' } } as any)}><Text style={tb.zoomSign}>+</Text></TouchableOpacity>
+        </View>
+        <View style={tb.userChip}>
+          <View style={tb.uAvatar}><Text style={tb.uAvatarText}>{userName.charAt(0).toUpperCase()}</Text></View>
+          <Text style={tb.uName} numberOfLines={1}>{userName}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const tb = StyleSheet.create({
+  root: {
+    height: LAYOUT.header, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border,
+    paddingHorizontal: LAYOUT.pad, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  },
+  title: { fontSize: 15, fontWeight: '700', color: C.text, letterSpacing: -0.3 },
+  sub: { fontSize: 11.5, color: C.textMute, marginTop: 1, fontWeight: '500' },
+  userChip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4, paddingHorizontal: 4, paddingRight: 12, borderRadius: 20, borderWidth: 1, borderColor: C.border },
+  uAvatar: { width: 26, height: 26, borderRadius: 13, backgroundColor: C.text, alignItems: 'center', justifyContent: 'center' },
+  uAvatarText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  uName: { fontSize: 12.5, fontWeight: '600', color: C.textMid, maxWidth: 160 },
+  zoom: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingHorizontal: 4, paddingVertical: 2 },
+  zoomBtn: { width: 22, height: 22, borderRadius: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: C.slateSoft },
+  zoomSign: { fontSize: 16, fontWeight: '700', color: C.textMid },
+  zoomVal: { fontSize: 12, fontWeight: '600', color: C.textMid, minWidth: 40, textAlign: 'center' },
+});
+
+// ---------------------------------------------------------------------------
+// Page wrapper
+// ---------------------------------------------------------------------------
+
+function Page({ children }: { children: React.ReactNode }) {
+  return (
+    <ScrollView style={u.scroll} contentContainerStyle={u.scrollPad} showsVerticalScrollIndicator={false}>
+      <View style={u.pageInner}>{children}</View>
+    </ScrollView>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+function WebDashboard() {
+  const { accessToken } = useAuth();
+  const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+
+  useEffect(() => { fetchStaffStudentRoster(accessToken).then(setStudents); }, []);
+  if (!students) return <Loader />;
+
+  const counts = {
+    total: students.length,
+    onCourse: students.filter((s) => s.stage === 'on-course').length,
+    placed: students.filter((s) => s.stage === 'on-placement' || s.stage === 'bond-completed').length,
+    hunting: students.filter((s) => s.stage === 'job-hunting').length,
+  };
+  const rate = counts.total ? Math.round((counts.placed / counts.total) * 100) : 0;
+
+  const cohortMap: Record<string, number> = {};
+  students.forEach((s) => { cohortMap[s.cohortName] = (cohortMap[s.cohortName] ?? 0) + 1; });
+  const cohorts = Object.entries(cohortMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const maxC = Math.max(...cohorts.map(([, n]) => n), 1);
+  const BAR = ['#DC2626', '#7A5AF8', '#17B26A', '#F79009', '#2E90FA', '#6172F3'];
+
+  return (
+    <Page>
+      <View style={u.kpiRow}>
+        <KpiCard label="Total Students" value={counts.total}   icon="users"     tint={C.slate}  soft={C.slateSoft} />
+        <KpiCard label="On Course"      value={counts.onCourse} icon="book"      tint={C.brand}  soft={C.brandSoft} />
+        <KpiCard label="Placed"         value={counts.placed}   icon="briefcase" tint={C.green}  soft={C.greenSoft} />
+        <KpiCard label="Job Hunting"    value={counts.hunting}  icon="search"    tint={C.amber}  soft={C.amberSoft} />
+      </View>
+
+      <View style={u.colsWrap}>
+        <Card style={{ flex: 1, minWidth: 240 }}>
+          <CardTitle>Placement Rate</CardTitle>
+          <View style={{ alignItems: 'center', paddingVertical: 12 }}>
+            <Donut pct={rate} />
+            <Text style={{ fontSize: 12.5, color: C.textMute, marginTop: 14 }}>
+              {counts.placed} of {counts.total} students placed
+            </Text>
+          </View>
+        </Card>
+
+        <Card style={{ flex: 1.6, minWidth: 300 }}>
+          <CardTitle>Students by Cohort</CardTitle>
+          {cohorts.map(([name, n], i) => {
+            const col = BAR[i % BAR.length];
+            return (
+              <View key={name} style={{ marginBottom: 14 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '500', color: C.textMid }}>{name}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: C.text }}>{n}</Text>
+                </View>
+                <View style={u.track}>
+                  <View style={{ width: `${(n / maxC) * 100}%` as any, height: '100%', backgroundColor: col, borderRadius: 4 }} />
+                </View>
+              </View>
+            );
+          })}
+        </Card>
+
+        <Card style={{ flex: 1.6, minWidth: 300 }}>
+          <CardTitle>Recent Students</CardTitle>
+          {students.slice(0, 6).map((s, i) => (
+            <View key={s.studentId} style={[
+              { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 9 },
+              i < Math.min(5, students.length - 1) && { borderBottomWidth: 1, borderBottomColor: C.borderSoft },
+            ]}>
+              <Avatar name={s.name} stage={s.stage} size={30} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: C.text }}>{s.name}</Text>
+                <Text style={{ fontSize: 11.5, color: C.textMute }}>{s.cohortName}</Text>
+              </View>
+              <StagePill stage={s.stage} />
+            </View>
+          ))}
+        </Card>
+      </View>
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Students (table + filters + edit modal)
+// ---------------------------------------------------------------------------
+
+function WebStudents() {
+  const { accessToken } = useAuth();
+  const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+  const [search, setSearch] = useState('');
+  const [stageFilter, setStageFilter] = useState<StudentLifecycleStage | 'all'>('all');
+  const [cohortFilters, setCohortFilters] = useState<Set<string>>(new Set());
+  const [editTarget, setEditTarget] = useState<StaffStudentRecord | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const [editStage, setEditStage] = useState<StudentLifecycleStage>('on-course');
+  const [editCompany, setEditCompany] = useState('');
+  const [editRole, setEditRole] = useState('');
+  const [editRO, setEditRO] = useState('');
+  const [editROEmail, setEditROEmail] = useState('');
+  const [editBond, setEditBond] = useState('');
+
+  useEffect(() => { fetchStaffStudentRoster(accessToken).then(setStudents); }, []);
+
+  const cohortOptions = useMemo(
+    () => (students ? Array.from(new Set(students.map((s) => s.cohortName))).sort() : []),
+    [students]
+  );
+
+  const filtered = useMemo(() => {
+    if (!students) return [];
+    const q = search.toLowerCase();
+    return students.filter((s) => {
+      const ms = !q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q);
+      const mst = stageFilter === 'all' || s.stage === stageFilter;
+      const mc = cohortFilters.size === 0 || cohortFilters.has(s.cohortName);
+      return ms && mst && mc;
+    });
+  }, [students, search, stageFilter, cohortFilters]);
+
+  function openEdit(s: StaffStudentRecord) {
+    setEditTarget(s);
+    setEditStage(s.stage);
+    setEditCompany(s.placementCompany ?? '');
+    setEditRole(s.placementRole ?? '');
+    setEditRO(s.reportingOfficer ?? '');
+    setEditROEmail(s.roEmail ?? '');
+    setEditBond(s.bondEndDate ?? '');
+  }
+
+  async function handleSave() {
+    if (!editTarget) return;
+    setSaving(true);
+    try {
+      await updatePlacementInfo(editTarget.studentId, {
+        stage: editStage, placementCompany: editCompany, placementRole: editRole,
+        reportingOfficer: editRO, roEmail: editROEmail, bondEndDate: editBond,
+      });
+      setStudents((prev) => prev?.map((s) =>
+        s.studentId === editTarget.studentId
+          ? { ...s, stage: editStage, placementCompany: editCompany, placementRole: editRole,
+              reportingOfficer: editRO, roEmail: editROEmail, bondEndDate: editBond }
+          : s
+      ) ?? null);
+      setEditTarget(null);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Could not save.');
+    } finally { setSaving(false); }
+  }
+
+  const STAGES: Array<StudentLifecycleStage | 'all'> = ['all', 'on-course', 'job-hunting', 'on-placement', 'bond-completed', 'withdrawn'];
+  if (!students) return <Loader />;
+
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={tbl.filterBar}>
+        <SearchBox value={search} onChange={setSearch} placeholder="Search name or email…" />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            {STAGES.map((s) => {
+              const on = stageFilter === s;
+              return (
+                <TouchableOpacity key={s} onPress={() => setStageFilter(s)} style={[tbl.chip, on && tbl.chipOn]}>
+                  <Text style={[tbl.chipText, on && tbl.chipTextOn]}>
+                    {s === 'all' ? 'All stages' : STAGE[s as StudentLifecycleStage]?.label ?? s}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </ScrollView>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            {cohortOptions.map((c) => {
+              const on = cohortFilters.has(c);
+              return (
+                <TouchableOpacity
+                  key={c}
+                  onPress={() => setCohortFilters((prev) => {
+                    const n = new Set(prev); n.has(c) ? n.delete(c) : n.add(c); return n;
+                  })}
+                  style={[tbl.chip, on && { backgroundColor: C.violet, borderColor: C.violet }]}
+                >
+                  <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{c}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </ScrollView>
+        <Text style={tbl.count}>{filtered.length} student{filtered.length !== 1 ? 's' : ''}</Text>
+      </View>
+
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: LAYOUT.pad }} showsVerticalScrollIndicator={false}>
+        <View style={u.pageInner}>
+          <Card style={{ padding: 0, overflow: 'hidden' }}>
+            <View style={tbl.thead}>
+              {['Student', 'Cohort', 'Stage', 'Placement', 'Bond End', ''].map((col, idx) => (
+                <Text key={idx} style={[tbl.th, idx === 0 && { flex: 2 }, idx === 3 && { flex: 2 }, idx === 5 && { flex: 0.6, textAlign: 'right' }]}>{col}</Text>
+              ))}
+            </View>
+            {filtered.map((s) => (
+              <View key={s.studentId} {...({ dataSet: { row: '1' } } as any)} style={tbl.row}>
+                <View style={[tbl.cell, { flex: 2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+                  <Avatar name={s.name} stage={s.stage} size={32} />
+                  <View>
+                    <Text style={tbl.name}>{s.name}</Text>
+                    <Text style={tbl.meta}>{s.email}</Text>
+                  </View>
+                </View>
+                <Text style={tbl.cell}>{s.cohortName}</Text>
+                <View style={tbl.cell}><StagePill stage={s.stage} /></View>
+                <View style={[tbl.cell, { flex: 2 }]}>
+                  {s.placementCompany ? (
+                    <View>
+                      <Text style={tbl.name}>{s.placementRole ?? '—'}</Text>
+                      <Text style={tbl.meta}>{s.placementCompany}</Text>
+                    </View>
+                  ) : <Text style={tbl.meta}>—</Text>}
+                </View>
+                <Text style={tbl.cell}>{s.bondEndDate ?? '—'}</Text>
+                <View style={[tbl.cell, { flex: 0.6, alignItems: 'flex-end' }]}>
+                  <TouchableOpacity style={tbl.editBtn} onPress={() => openEdit(s)} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Icon name="edit" size={13} color={C.textMid} />
+                    <Text style={tbl.editText}>Edit</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+            {filtered.length === 0 && (
+              <View style={{ padding: 40, alignItems: 'center' }}>
+                <Text style={{ color: C.textMute, fontSize: 13 }}>No students match your filters.</Text>
+              </View>
+            )}
+          </Card>
+        </View>
+      </ScrollView>
+
+      <Modal visible={Boolean(editTarget)} animationType="fade" transparent onRequestClose={() => setEditTarget(null)}>
+        <View style={em.backdrop}>
+          <View style={em.sheet} {...({ dataSet: { card: '1' } } as any)}>
+            <View style={em.head}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                {editTarget && <Avatar name={editTarget.name} stage={editStage} size={40} />}
+                <View>
+                  <Text style={em.title}>{editTarget?.name}</Text>
+                  <Text style={em.sub}>{editTarget?.cohortName} · {editTarget?.email}</Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={() => setEditTarget(null)} style={em.close} {...({ dataSet: { btn: '1' } } as any)}>
+                <Icon name="close" size={15} color={C.textMid} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ padding: 24 }}>
+              <Text style={em.section}>Lifecycle Stage</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
+                {(Object.keys(STAGE) as StudentLifecycleStage[]).map((st) => {
+                  const on = editStage === st;
+                  return (
+                    <TouchableOpacity
+                      key={st}
+                      onPress={() => setEditStage(st)}
+                      style={[em.stage, on && { backgroundColor: STAGE[st].bg, borderColor: STAGE[st].dot }]}
+                    >
+                      <View style={[pill.dot, { backgroundColor: STAGE[st].dot }]} />
+                      <Text style={[em.stageText, on && { color: STAGE[st].fg }]}>{STAGE[st].label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={em.section}>Placement Details</Text>
+              {[
+                { label: 'Company', value: editCompany, set: setEditCompany, ph: 'e.g. ST Engineering' },
+                { label: 'Role', value: editRole, set: setEditRole, ph: 'e.g. Cybersecurity Analyst' },
+                { label: 'Reporting Officer', value: editRO, set: setEditRO, ph: 'Full name' },
+                { label: 'RO Email', value: editROEmail, set: setEditROEmail, ph: 'officer@company.com' },
+                { label: 'Bond End Date', value: editBond, set: setEditBond, ph: 'YYYY-MM-DD' },
+              ].map((f) => (
+                <View key={f.label} style={{ marginBottom: 14 }}>
+                  <Text style={em.fieldLabel}>{f.label}</Text>
+                  <TextInput style={em.input as any} value={f.value} onChangeText={f.set} placeholder={f.ph} placeholderTextColor="#C2C9D6" />
+                </View>
+              ))}
+            </ScrollView>
+            <View style={em.foot}>
+              <TouchableOpacity style={em.cancel} onPress={() => setEditTarget(null)} {...({ dataSet: { btn: '1' } } as any)}>
+                <Text style={em.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={em.save} onPress={handleSave} disabled={saving} {...({ dataSet: { btn: '1' } } as any)}>
+                <Text style={em.saveText}>{saving ? 'Saving…' : 'Save changes'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const tbl = StyleSheet.create({
+  filterBar: {
+    flexDirection: 'row', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+    paddingHorizontal: LAYOUT.pad, paddingVertical: 12,
+    backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  chip: { paddingHorizontal: 11, paddingVertical: 5, borderRadius: 18, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
+  chipOn: { backgroundColor: C.brand, borderColor: C.brand },
+  chipText: { fontSize: 12, fontWeight: '500', color: C.textMid },
+  chipTextOn: { color: '#fff', fontWeight: '600' },
+  count: { fontSize: 12, color: C.textMute, marginLeft: 'auto' as any, flexShrink: 0 },
+  thead: { flexDirection: 'row', backgroundColor: C.headFill, paddingVertical: 11, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: C.border },
+  th: { flex: 1, fontSize: 11, fontWeight: '600', color: C.textMute, textTransform: 'uppercase', letterSpacing: 0.4 },
+  row: { flexDirection: 'row', paddingVertical: 9, paddingHorizontal: 16, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: C.borderSoft },
+  cell: { flex: 1, fontSize: 12.5, color: C.textMid },
+  name: { fontSize: 13, fontWeight: '600', color: C.text },
+  meta: { fontSize: 11.5, color: C.textMute, marginTop: 1 },
+  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, paddingVertical: 6, borderRadius: 7, backgroundColor: C.card, borderWidth: 1, borderColor: C.border },
+  editText: { fontSize: 12, fontWeight: '600', color: C.textMid },
+});
+
+const em = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(16,24,40,0.45)', justifyContent: 'center', alignItems: 'center' },
+  sheet: { width: 540, maxHeight: '86%' as any, backgroundColor: C.card, borderRadius: 16, overflow: 'hidden', flexDirection: 'column' },
+  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 22, borderBottomWidth: 1, borderBottomColor: C.border },
+  title: { fontSize: 16, fontWeight: '700', color: C.text },
+  sub: { fontSize: 12, color: C.textMute, marginTop: 2 },
+  close: { padding: 8, borderRadius: 8, backgroundColor: C.slateSoft },
+  section: { fontSize: 11, fontWeight: '700', color: C.textMute, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 },
+  stage: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 18, borderWidth: 1, borderColor: C.border },
+  stageText: { fontSize: 12, fontWeight: '600', color: C.textMid },
+  fieldLabel: { fontSize: 12, fontWeight: '600', color: C.textMid, marginBottom: 6 },
+  input: { borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, fontSize: 13, color: C.text, backgroundColor: '#FCFCFD', outlineStyle: 'none' },
+  foot: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, padding: 18, borderTopWidth: 1, borderTopColor: C.border },
+  cancel: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: C.border },
+  cancelText: { fontSize: 13, fontWeight: '600', color: C.textMid },
+  save: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 8, backgroundColor: C.brand },
+  saveText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+});
+
+// ---------------------------------------------------------------------------
+// Certifications
+// ---------------------------------------------------------------------------
+
+function WebCertifications() {
+  const { accessToken } = useAuth();
+  const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+  const [query, setQuery] = useState('');
+
+  useEffect(() => { fetchStaffStudentRoster(accessToken).then(setStudents); }, []);
+
+  const filtered = useMemo(() => {
+    if (!students) return [];
+    const q = query.toLowerCase();
+    return students.filter((s) =>
+      !q || s.name.toLowerCase().includes(q) || s.certifications.some((c) => c.name.toLowerCase().includes(q))
+    );
+  }, [students, query]);
+
+  if (!students) return <Loader />;
+  const total = students.reduce((sum, s) => sum + s.certifications.length, 0);
+
+  return (
+    <Page>
+      <View style={u.kpiRow}>
+        <KpiCard label="Total Students" value={students.length} icon="users" tint={C.slate} soft={C.slateSoft} />
+        <KpiCard label="Certifications" value={total} icon="award" tint={C.violet} soft={C.violetSoft} />
+        <KpiCard label="Avg per Student" value={students.length ? (total / students.length).toFixed(1) : 0} icon="chart" tint={C.green} soft={C.greenSoft} />
+      </View>
+
+      <Card style={{ padding: 0, overflow: 'hidden' }}>
+        <View style={{ padding: 16, borderBottomWidth: 1, borderBottomColor: C.border }}>
+          <SearchBox value={query} onChange={setQuery} placeholder="Search students or certifications…" />
+        </View>
+        <View style={tbl.thead}>
+          {['Student', 'Cohort', 'Stage', 'Certifications'].map((col, idx) => (
+            <Text key={col} style={[tbl.th, idx === 0 && { flex: 1.4 }, idx === 3 && { flex: 3 }]}>{col}</Text>
+          ))}
+        </View>
+        {filtered.map((s) => (
+          <View key={s.studentId} {...({ dataSet: { row: '1' } } as any)} style={tbl.row}>
+            <View style={[tbl.cell, { flex: 1.4, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+              <Avatar name={s.name} stage={s.stage} size={32} />
+              <View>
+                <Text style={tbl.name}>{s.name}</Text>
+                <Text style={tbl.meta}>{s.email}</Text>
+              </View>
+            </View>
+            <Text style={tbl.cell}>{s.cohortName}</Text>
+            <View style={tbl.cell}><StagePill stage={s.stage} /></View>
+            <View style={[tbl.cell, { flex: 3, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }]}>
+              {s.certifications.length === 0
+                ? <Text style={tbl.meta}>No certifications</Text>
+                : s.certifications.map((c) => (
+                  <View key={c.id} style={u.certTag}>
+                    <Text style={u.certTagText}>{c.name}</Text>
+                  </View>
+                ))}
+            </View>
+          </View>
+        ))}
+      </Card>
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Growth
+// ---------------------------------------------------------------------------
+
+function WebGrowth() {
+  const { accessToken } = useAuth();
+  const [growth, setGrowth] = useState<CohortGrowthPoint[]>([]);
+
+  useEffect(() => { fetchCohortGrowth(accessToken).then(setGrowth); }, []);
+  if (!growth.length) return <Loader />;
+
+  const maxVal = Math.max(...growth.map((g) => g.enrolled), 1);
+  const overall = {
+    enrolled: growth.reduce((s, g) => s + g.enrolled, 0),
+    graduated: growth.reduce((s, g) => s + g.graduated, 0),
+    placed: growth.reduce((s, g) => s + g.placed, 0),
+  };
+
+  return (
+    <Page>
+      <View style={u.kpiRow}>
+        <KpiCard label="Total Enrolled" value={overall.enrolled} icon="users" tint={C.slate} soft={C.slateSoft} />
+        <KpiCard label="Graduated" value={overall.graduated} icon="cap" tint={C.violet} soft={C.violetSoft} />
+        <KpiCard label="Placed" value={overall.placed} icon="briefcase" tint={C.green} soft={C.greenSoft} />
+        <KpiCard label="Placement Rate" value={overall.graduated ? `${Math.round(overall.placed / overall.graduated * 100)}%` : '—'} icon="trending" tint={C.brand} soft={C.brandSoft} />
+      </View>
+
+      <View style={u.colsWrap}>
+        <Card style={{ flex: 1.2, minWidth: 320 }}>
+          <CardTitle>Enrollment by Cohort</CardTitle>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 14, height: 190, paddingTop: 18 }}>
+            {growth.map((row) => (
+              <View key={row.cohortName} style={{ flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: C.text, marginBottom: 6 }}>{row.enrolled}</Text>
+                <View style={{ width: '56%', backgroundColor: C.brand, borderTopLeftRadius: 5, borderTopRightRadius: 5, height: `${(row.enrolled / maxVal) * 100}%` as any }} />
+                <Text style={{ fontSize: 11, color: C.textMute, marginTop: 8, fontWeight: '500' }}>{row.cohortName.replace('Cohort ', 'C')}</Text>
+              </View>
+            ))}
+          </View>
+        </Card>
+
+        <Card style={{ flex: 1.8, minWidth: 340, padding: 0, overflow: 'hidden' }}>
+          <View style={{ padding: 20, paddingBottom: 0 }}><CardTitle>Cohort Breakdown</CardTitle></View>
+          <View style={tbl.thead}>
+            {['Cohort', 'Year', 'Enrolled', 'Graduated', 'Placed', 'Rate'].map((col) => (
+              <Text key={col} style={tbl.th}>{col}</Text>
+            ))}
+          </View>
+          {growth.map((row) => {
+            const rate = row.graduated > 0 ? Math.round(row.placed / row.graduated * 100) : null;
+            return (
+              <View key={row.cohortName} {...({ dataSet: { row: '1' } } as any)} style={tbl.row}>
+                <Text style={[tbl.cell, { fontWeight: '600', color: C.text }]}>{row.cohortName}</Text>
+                <Text style={tbl.cell}>{row.year}</Text>
+                <Text style={tbl.cell}>{row.enrolled}</Text>
+                <Text style={tbl.cell}>{row.graduated}</Text>
+                <Text style={tbl.cell}>{row.placed}</Text>
+                <Text style={[tbl.cell, { color: rate && rate >= 70 ? C.green : C.amber, fontWeight: '700' }]}>
+                  {rate !== null ? `${rate}%` : '—'}
+                </Text>
+              </View>
+            );
+          })}
+        </Card>
+      </View>
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// News
+// ---------------------------------------------------------------------------
+
+function WebNews() {
+  const { accessToken } = useAuth();
+  const [items, setItems] = useState<Announcement[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { fetchAnnouncements(accessToken).then((a) => { setItems(a); setLoading(false); }); }, []);
+  if (loading) return <Loader />;
+
+  return (
+    <Page>
+      <View style={{ maxWidth: 760, width: '100%' }}>
+        {items.map((item) => (
+          <Card key={item.id} style={{ marginBottom: 14 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                {item.pinned && (
+                  <View style={u.pinTag}>
+                    <Icon name="pin" size={11} color={C.brand} />
+                    <Text style={u.pinText}>Pinned</Text>
+                  </View>
+                )}
+                <View style={u.audTag}>
+                  <Text style={u.audText}>{item.audience}</Text>
+                </View>
+              </View>
+              <Text style={{ fontSize: 11.5, color: C.textMute }}>
+                {new Date(item.postedAt).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </Text>
+            </View>
+            <Text style={{ fontSize: 15, fontWeight: '700', color: C.text, marginBottom: 6, letterSpacing: -0.2 }}>{item.title}</Text>
+            <Text style={{ fontSize: 13.5, color: C.textMid, lineHeight: 21 }}>{item.body}</Text>
+            {item.author ? <Text style={{ fontSize: 11.5, color: C.textMute, marginTop: 12 }}>— {item.author}</Text> : null}
+          </Card>
+        ))}
+      </View>
+    </Page>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared styles
+// ---------------------------------------------------------------------------
+
+const u = StyleSheet.create({
+  scroll: { flex: 1, backgroundColor: C.appBg },
+  scrollPad: { padding: LAYOUT.pad, paddingBottom: 40, alignItems: 'center' },
+  pageInner: { width: '100%', maxWidth: LAYOUT.maxW },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.appBg },
+  card: { backgroundColor: C.card, borderRadius: 12, padding: 20, borderWidth: 1, borderColor: C.border },
+  cardTitle: { fontSize: 14, fontWeight: '700', color: C.text, letterSpacing: -0.2 },
+  kpiRow: { flexDirection: 'row', gap: 16, marginBottom: 18, flexWrap: 'wrap', width: '100%', maxWidth: LAYOUT.maxW },
+  colsWrap: { flexDirection: 'row', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap', width: '100%', maxWidth: LAYOUT.maxW },
+  track: { height: 7, backgroundColor: '#EFF1F4', borderRadius: 4, overflow: 'hidden' },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FCFCFD', borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8, minWidth: 240 },
+  searchInput: { fontSize: 13, color: C.text, flex: 1, outlineStyle: 'none' },
+  certTag: { backgroundColor: C.violetSoft, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 16 },
+  certTagText: { fontSize: 11.5, color: C.violet, fontWeight: '600' },
+  pinTag: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: C.brandSoft, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 16 },
+  pinText: { fontSize: 11, color: C.brand, fontWeight: '700' },
+  audTag: { backgroundColor: C.slateSoft, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 16 },
+  audText: { fontSize: 11, color: C.textMid, fontWeight: '600', textTransform: 'capitalize' },
+});
+
+// ---------------------------------------------------------------------------
+// Page config
+// ---------------------------------------------------------------------------
+
+const PAGES: Record<string, { title: string; subtitle: string; component: React.ComponentType }> = {
+  students:       { title: 'Students',       subtitle: 'Manage student records and placement info', component: WebStudents },
+  dashboard:      { title: 'Dashboard',      subtitle: 'Overview of cohort health and outcomes',    component: WebDashboard },
+  certifications: { title: 'Certifications', subtitle: 'Track certifications across all students',   component: WebCertifications },
+  growth:         { title: 'Growth',         subtitle: 'Enrollment and placement trends over time', component: WebGrowth },
+  news:           { title: 'News',           subtitle: 'Announcements posted to the community',      component: WebNews },
+};
+
+// ---------------------------------------------------------------------------
+// Portal root
+// ---------------------------------------------------------------------------
+
+export function StaffWebPortal() {
+  const { user, signOut } = useAuth();
+  const [activeId, setActiveId] = useState('students');
+  const [scale, setScale] = useState(0.85);
+  const clamp = (v: number) => Math.max(0.4, Math.min(1.3, Math.round(v * 100) / 100));
+
+  // Restore saved zoom
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = parseFloat(window.localStorage?.getItem('ra-portal-scale') ?? '');
+    if (!Number.isNaN(saved) && saved > 0) setScale(saved);
+  }, []);
+
+  // Apply + persist zoom (counteracts browser zoom / OS display scaling / high-DPI)
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    (document.body.style as any).zoom = String(scale);
+    try { window.localStorage?.setItem('ra-portal-scale', String(scale)); } catch (e) {}
+  }, [scale]);
+
+  // Reset zoom when leaving the portal (e.g. sign out)
+  useEffect(() => () => { if (typeof document !== 'undefined') (document.body.style as any).zoom = ''; }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    let meta = document.querySelector('meta[name="viewport"]') as HTMLMetaElement;
+    if (!meta) { meta = document.createElement('meta'); meta.name = 'viewport'; document.head.appendChild(meta); }
+    meta.content = 'width=device-width, initial-scale=1';
+
+    if (!document.getElementById('ra-inter-font')) {
+      const p1 = document.createElement('link'); p1.rel = 'preconnect'; p1.href = 'https://fonts.googleapis.com'; document.head.appendChild(p1);
+      const p2 = document.createElement('link'); p2.rel = 'preconnect'; p2.href = 'https://fonts.gstatic.com'; p2.crossOrigin = 'anonymous'; document.head.appendChild(p2);
+      const fl = document.createElement('link'); fl.id = 'ra-inter-font'; fl.rel = 'stylesheet';
+      fl.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap';
+      document.head.appendChild(fl);
+    }
+
+    if (!document.getElementById('ra-portal-styles')) {
+      const style = document.createElement('style');
+      style.id = 'ra-portal-styles';
+      style.textContent = `
+        html, body, #root { margin: 0; padding: 0; height: 100%; overflow: hidden; background: ${C.appBg}; }
+        body, body *, input, textarea, button {
+          font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          text-rendering: optimizeLegibility;
+        }
+        [data-card="1"] { box-shadow: 0 1px 2px rgba(16,24,40,0.04), 0 1px 3px rgba(16,24,40,0.05); }
+        [data-row="1"] { transition: background 120ms ease; }
+        [data-row="1"]:hover { background: #FAFBFC; }
+        [data-nav="1"] { transition: background 120ms ease; }
+        [data-nav="1"]:hover { background: rgba(255,255,255,0.06); }
+        [data-btn="1"] { transition: filter 120ms ease, background 120ms ease; }
+        [data-btn="1"]:hover { filter: brightness(0.97); }
+        input:focus, textarea:focus { outline: none !important; border-color: ${C.brand} !important; box-shadow: 0 0 0 3px rgba(220,38,38,0.12) !important; }
+        ::-webkit-scrollbar { width: 9px; height: 9px; }
+        ::-webkit-scrollbar-thumb { background: #D0D5DD; border-radius: 8px; border: 2px solid ${C.appBg}; }
+        ::-webkit-scrollbar-thumb:hover { background: #98A2B3; }
+        ::-webkit-scrollbar-track { background: transparent; }
+      `;
+      document.head.appendChild(style);
+    }
+  }, []);
+
+  function handleSignOut() {
+    Alert.alert('Sign out', 'Sign out of the portal?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign out', style: 'destructive', onPress: signOut },
+    ]);
+  }
+
+  const page = PAGES[activeId] ?? PAGES['students'];
+  const PageComponent = page.component;
+  const userName = user?.displayName ?? 'Staff';
+
+  return (
+    <View style={portal.root}>
+      <Sidebar active={activeId} onSelect={setActiveId} onSignOut={handleSignOut} userName={userName} />
+      <View style={portal.main}>
+        <TopBar
+          title={page.title} subtitle={page.subtitle} userName={userName}
+          scale={scale}
+          onDec={() => setScale((s) => clamp(s - 0.05))}
+          onInc={() => setScale((s) => clamp(s + 0.05))}
+          onReset={() => setScale(1)}
+        />
+        <PageComponent />
+      </View>
+    </View>
+  );
+}
+
+const portal = StyleSheet.create({
+  root: { flex: 1, flexDirection: 'row', backgroundColor: C.appBg },
+  main: { flex: 1, flexDirection: 'column', overflow: 'hidden' as any },
+});

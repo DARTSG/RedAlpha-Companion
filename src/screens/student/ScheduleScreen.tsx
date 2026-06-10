@@ -1,0 +1,14 @@
+import React from 'react';
+import { Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors, typography } from '@/theme';
+
+export function ScheduleScreen() {
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['top']}>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ ...typography.body, color: colors.textSecondary }}>Schedule removed</Text>
+      </View>
+    </SafeAreaView>
+  );
+}
