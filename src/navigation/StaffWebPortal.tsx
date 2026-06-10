@@ -25,7 +25,8 @@ import {
   fetchCohortGrowth,
   fetchStaffStudentRoster,
 } from '@/data/api';
-import { updatePlacementInfo } from '@/data/profileApi';
+import { updatePlacementInfo, updateStudentRecord } from '@/data/profileApi';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import * as mgmt from '@/data/managementApi';
 import {
   Announcement,
@@ -478,6 +479,7 @@ function WebDashboard() {
   const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
   useEffect(() => {
     fetchStaffStudentRoster(accessToken).then((roster) => {
+      if (isSupabaseConfigured) { setStudents(roster); return; }
       const ov = mgmt.getPlacementOverrides();
       setStudents(roster.map((s) => (ov[s.studentId] ? { ...s, ...ov[s.studentId] } : s)));
     });
@@ -900,8 +902,19 @@ function WebStudents() {
       reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editTarget.bondEndDate,
     };
     try {
-      mgmt.savePlacement(editTarget.studentId, override);
-      await updatePlacementInfo(editTarget.studentId, { stage: editStage, placementCompany: act?.company, placementRole: act?.role, reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editTarget.bondEndDate });
+      if (isSupabaseConfigured) {
+        await updateStudentRecord(editTarget.studentId, {
+          stage: editStage, cohortName: editCohort, dateOfBirth: editDob || undefined,
+          accountManager: editAcctMgr || undefined, contactNo: editContact || undefined,
+          personalEmail: editPersonalEmail || undefined, dateJoined: editDateJoined || undefined,
+          ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, placements: editPlacements,
+          placementCompany: act?.company, placementRole: act?.role,
+          reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editTarget.bondEndDate,
+        });
+      } else {
+        mgmt.savePlacement(editTarget.studentId, override);
+        await updatePlacementInfo(editTarget.studentId, { stage: editStage, placementCompany: act?.company, placementRole: act?.role, reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editTarget.bondEndDate });
+      }
       setStudents((prev) => prev?.map((s) => (s.studentId === editTarget.studentId ? { ...s, ...override } : s)) ?? null);
       setEditTarget(null);
     } catch (e: any) { Alert.alert('Error', e?.message ?? 'Could not save.'); }

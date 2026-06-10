@@ -1,4 +1,6 @@
 import * as mgmt from './managementApi';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { getAllStudents } from './profileApi';
 import {
   Announcement,
   Cohort,
@@ -61,7 +63,8 @@ export async function fetchCourses(_accessToken: string | null): Promise<Course[
 
 // ---- Staff endpoints -------------------------------------------------------
 
-export async function fetchStaffStudentRoster(_accessToken: string | null): Promise<StaffStudentRecord[]> {
+export async function fetchStaffStudentRoster(accessToken: string | null): Promise<StaffStudentRecord[]> {
+  if (isSupabaseConfigured) return getAllStudents(accessToken);
   return delay(mockStaffStudents);
 }
 

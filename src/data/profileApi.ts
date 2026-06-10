@@ -8,7 +8,7 @@
 
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import { PlacementInfo, StaffStudentRecord, StudentProfile } from '@/types';
+import { PlacementInfo, PlacementRecord, StaffStudentRecord, StudentLifecycleStage, StudentProfile } from '@/types';
 import { mockStaffStudents } from './mockData';
 import { isSupabaseConfigured, getSupabaseClient } from '@/lib/supabase';
 
@@ -171,17 +171,25 @@ export async function getAllStudents(_accessToken: string | null): Promise<Staff
       studentId: row.user_id,
       name: row.full_name,
       email: row.email,
-      dateOfBirth: row.date_of_birth,
+      personalEmail: row.personal_email ?? undefined,
+      contactNo: row.contact_no ?? undefined,
       cohortName: row.cohort_name,
       stage: row.lifecycle_stage ?? 'on-course',
-      certifications: [],
-      cvUrl: row.cv_url,
-      cvFilename: row.cv_filename,
-      placementCompany: row.placement_company,
-      placementRole: row.placement_role,
-      reportingOfficer: row.reporting_officer,
-      roEmail: row.ro_email,
-      bondEndDate: row.bond_end_date,
+      dateOfBirth: row.date_of_birth ?? undefined,
+      dateJoined: row.date_joined ?? undefined,
+      accountManager: row.account_manager ?? undefined,
+      ccpGrant: row.ccp_grant ?? undefined,
+      certifications: Array.isArray(row.certifications) ? row.certifications : [],
+      cvUrl: row.cv_url ?? undefined,
+      cvFilename: row.cv_filename ?? undefined,
+      bondMonths: row.bond_months ?? undefined,
+      bondEndDate: row.bond_end_date ?? undefined,
+      placementCompany: row.placement_company ?? undefined,
+      placementRole: row.placement_role ?? undefined,
+      placementStartDate: row.placement_start_date ?? undefined,
+      reportingOfficer: row.reporting_officer ?? undefined,
+      roEmail: row.ro_email ?? undefined,
+      placements: Array.isArray(row.placements) ? row.placements : undefined,
     }));
   }
 
@@ -232,4 +240,51 @@ export async function updatePlacementInfo(
   }
   // Demo mode — save per-student placement info locally
   await secureSet(placementKey(studentId), JSON.stringify(info));
+}
+
+// ---------------------------------------------------------------------------
+// Staff: full student record edit (Supabase). No-op in demo (handled locally).
+// ---------------------------------------------------------------------------
+
+export interface StudentEdit {
+  stage: StudentLifecycleStage;
+  cohortName?: string;
+  dateOfBirth?: string;
+  accountManager?: string;
+  contactNo?: string;
+  personalEmail?: string;
+  dateJoined?: string;
+  ccpGrant?: 'yes' | 'completed' | 'no';
+  bondMonths?: number;
+  placements?: PlacementRecord[];
+  placementCompany?: string;
+  placementRole?: string;
+  reportingOfficer?: string;
+  roEmail?: string;
+  bondEndDate?: string;
+}
+
+export async function updateStudentRecord(studentId: string, p: StudentEdit): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  const { error } = await sb.from('student_profiles').update({
+    lifecycle_stage: p.stage,
+    cohort_name: p.cohortName ?? null,
+    date_of_birth: p.dateOfBirth ?? null,
+    account_manager: p.accountManager ?? null,
+    contact_no: p.contactNo ?? null,
+    personal_email: p.personalEmail ?? null,
+    date_joined: p.dateJoined ?? null,
+    ccp_grant: p.ccpGrant ?? null,
+    bond_months: p.bondMonths ?? null,
+    placements: p.placements ?? [],
+    placement_company: p.placementCompany ?? null,
+    placement_role: p.placementRole ?? null,
+    reporting_officer: p.reportingOfficer ?? null,
+    ro_email: p.roEmail ?? null,
+    bond_end_date: p.bondEndDate ?? null,
+    updated_at: new Date().toISOString(),
+  }).eq('user_id', studentId);
+  if (error) throw new Error(error.message);
 }

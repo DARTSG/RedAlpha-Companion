@@ -157,3 +157,56 @@ create table if not exists public.app_settings (
 alter table public.app_settings enable row level security;
 create policy "settings read"  on public.app_settings for select using (public.is_staff());
 create policy "settings write" on public.app_settings for all    using (public.is_staff_admin()) with check (public.is_staff_admin());
+
+-- ===========================================================================
+-- Extended student_profiles columns (for the full app data model + CSV import)
+-- ===========================================================================
+alter table public.student_profiles
+  add column if not exists account_manager     text,
+  add column if not exists contact_no          text,
+  add column if not exists personal_email      text,
+  add column if not exists date_joined         text,
+  add column if not exists ccp_grant           text,
+  add column if not exists lifecycle_stage     text default 'on-course',
+  add column if not exists bond_months         int,
+  add column if not exists bond_end_date       text,
+  add column if not exists placement_company   text,
+  add column if not exists placement_role      text,
+  add column if not exists placement_start_date text,
+  add column if not exists reporting_officer   text,
+  add column if not exists ro_email            text,
+  add column if not exists placements          jsonb default '[]'::jsonb,
+  add column if not exists certifications       jsonb default '[]'::jsonb;
+
+-- Staff can insert students (for staff-added trainees / imports)
+drop policy if exists "Staff can insert profiles" on public.student_profiles;
+create policy "Staff can insert profiles" on public.student_profiles for insert with check (public.is_staff());
+
+-- ===========================================================================
+-- Cohorts / courses / syllabus (app-managed; staff write, staff read)
+-- ===========================================================================
+create table if not exists public.cohorts (
+  id text primary key, name text not null, moodle_name text, track text,
+  start_date text, end_date text, student_count int default 0, color text,
+  active boolean default true, created_at timestamptz default now()
+);
+alter table public.cohorts enable row level security;
+create policy "cohorts read"  on public.cohorts for select using (public.is_staff());
+create policy "cohorts write" on public.cohorts for all    using (public.is_staff()) with check (public.is_staff());
+
+create table if not exists public.courses (
+  id text primary key, title text not null, provider text, track text, description text,
+  start_date text, end_date text, spots_total int default 0, spots_remaining int default 0,
+  status text default 'open', color text, created_at timestamptz default now()
+);
+alter table public.courses enable row level security;
+create policy "courses read"  on public.courses for select using (public.is_staff());
+create policy "courses write" on public.courses for all    using (public.is_staff()) with check (public.is_staff());
+
+create table if not exists public.syllabus_weeks (
+  id uuid primary key default gen_random_uuid(), cohort_id text not null,
+  week_number int not null, title text, topics text
+);
+alter table public.syllabus_weeks enable row level security;
+create policy "syllabus read"  on public.syllabus_weeks for select using (public.is_staff());
+create policy "syllabus write" on public.syllabus_weeks for all    using (public.is_staff()) with check (public.is_staff());
