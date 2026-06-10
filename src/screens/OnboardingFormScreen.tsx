@@ -70,8 +70,12 @@ export function OnboardingFormScreen() {
       let cvUrl: string | undefined;
       let cvFilename: string | undefined;
       if (cvFile) {
-        cvUrl = await uploadCV(user!.id, cvFile.uri, cvFile.name, cvFile.mimeType);
-        cvFilename = cvFile.name;
+        try {
+          cvUrl = await uploadCV(user!.id, cvFile.uri, cvFile.name, cvFile.mimeType);
+          cvFilename = cvFile.name;
+        } catch (e) {
+          console.warn('[Onboarding] CV upload failed, continuing without it:', e);
+        }
       }
 
       const profile: StudentProfile = {
@@ -86,10 +90,18 @@ export function OnboardingFormScreen() {
         completedAt: new Date().toISOString(),
       };
 
-      await saveStudentProfile(profile);
+      // Best-effort backend save — never block onboarding if it fails (e.g. demo user
+      // with no backend session, or a transient error). The profile-complete flag is
+      // stored locally so the student always proceeds into the app.
+      try {
+        await saveStudentProfile(profile);
+      } catch (e) {
+        console.warn('[Onboarding] profile save failed, continuing:', e);
+      }
+
       await completeProfile();
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Could not save your profile. Please try again.');
+      Alert.alert('Error', e?.message ?? 'Could not complete onboarding. Please try again.');
       setSaving(false);
     }
   }

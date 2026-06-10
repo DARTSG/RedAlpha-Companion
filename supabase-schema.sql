@@ -82,21 +82,30 @@ create policy "members deletable" on public.staff_members for delete using (true
 
 
 -- ===========================================================================
--- SECURE member policies — apply ONLY AFTER Supabase Third-Party Auth (Entra) is
--- enabled AND you've confirmed sign-in + data loading works. This replaces the
--- interim permissive policies above and restricts WRITES to admins (identified by
--- the email claim in the Entra ID token). Uncomment and run as one block.
+
 -- ===========================================================================
--- drop policy if exists "members readable"  on public.staff_members;
--- drop policy if exists "members insertable" on public.staff_members;
--- drop policy if exists "members updatable"  on public.staff_members;
--- drop policy if exists "members deletable"  on public.staff_members;
---
--- create policy "members read (signed in)" on public.staff_members for select
---   using (auth.jwt() is not null);
---
--- create policy "members write (admin only)" on public.staff_members for all
---   using (exists (select 1 from public.staff_members me
---                  where lower(me.email) = lower(auth.jwt() ->> 'email') and me.role = 'admin'))
---   with check (exists (select 1 from public.staff_members me
---                  where lower(me.email) = lower(auth.jwt() ->> 'email') and me.role = 'admin'));
+-- SECURE member policies — apply AFTER Supabase Azure (OAuth) sign-in works.
+-- Uses a SECURITY DEFINER helper so the admin check does NOT recurse on the
+-- same table (a policy that selects from staff_members inside a staff_members
+-- policy causes "infinite recursion"). Run this whole block once.
+-- ===========================================================================
+create or replace function public.is_staff_admin()
+returns boolean language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1 from public.staff_members
+    where lower(email) = lower(auth.jwt() ->> 'email') and role = 'admin'
+  );
+$$;
+
+drop policy if exists "members readable"          on public.staff_members;
+drop policy if exists "members insertable"        on public.staff_members;
+drop policy if exists "members updatable"         on public.staff_members;
+drop policy if exists "members deletable"         on public.staff_members;
+drop policy if exists "members read (signed in)"  on public.staff_members;
+drop policy if exists "members write (admin only)" on public.staff_members;
+
+create policy "members read (signed in)" on public.staff_members
+  for select using (auth.jwt() is not null);
+
+create policy "members write (admin)" on public.staff_members
+  for all using (public.is_staff_admin()) with check (public.is_staff_admin());

@@ -1,32 +1,23 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
 import * as SecureStore from 'expo-secure-store';
 import { AuthenticatedUser, StaffMember, UserRole } from '@/types';
 import * as mgmt from '@/data/managementApi';
-import { isSupabaseConfigured, setSupabaseAccessToken } from '@/lib/supabase';
+import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 
-WebBrowser.maybeCompleteAuthSession();
+// Emails that are always admin (bootstrap before the members table is populated).
+const BOOTSTRAP_ADMIN_EMAILS = (process.env.EXPO_PUBLIC_ADMIN_EMAILS ?? '')
+  .toLowerCase().split(',').map((s: string) => s.trim()).filter(Boolean);
 
-const AZURE_AD_CLIENT_ID = (process.env.EXPO_PUBLIC_AZURE_AD_CLIENT_ID ?? '').trim();
-const AZURE_AD_TENANT_ID = (process.env.EXPO_PUBLIC_AZURE_AD_TENANT_ID ?? 'common').trim();
+// If set, only these email domains may sign in (everyone else is rejected). Optional.
+const ALLOWED_DOMAINS = (process.env.EXPO_PUBLIC_ALLOWED_EMAIL_DOMAINS ?? '')
+  .toLowerCase().split(',').map((s: string) => s.trim()).filter(Boolean);
 
-const isAzureConfigured = Boolean(AZURE_AD_CLIENT_ID);
-
-const discovery = {
-  authorizationEndpoint: `https://login.microsoftonline.com/${AZURE_AD_TENANT_ID}/oauth2/v2.0/authorize`,
-  tokenEndpoint: `https://login.microsoftonline.com/${AZURE_AD_TENANT_ID}/oauth2/v2.0/token`,
-};
-
-const SESSION_STORAGE_KEY = 'bootcamp-companion.session.v2';
+const isWeb = Platform.OS === 'web';
+const DEMO_KEY = 'bootcamp-companion.demo.v1';
 const COHORT_STORAGE_KEY = 'bootcamp-companion.cohort.v1';
 const PROFILE_COMPLETE_KEY = 'bootcamp-companion.profileComplete.v1';
 
-// ---------------------------------------------------------------------------
-// Cross-platform storage (SecureStore on native, localStorage on web)
-// ---------------------------------------------------------------------------
-const isWeb = Platform.OS === 'web';
 async function storeGet(key: string): Promise<string | null> {
   if (isWeb) return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
   return SecureStore.getItemAsync(key);
@@ -38,12 +29,6 @@ async function storeSet(key: string, value: string): Promise<void> {
 async function storeDelete(key: string): Promise<void> {
   if (isWeb) { if (typeof localStorage !== 'undefined') localStorage.removeItem(key); return; }
   return SecureStore.deleteItemAsync(key);
-}
-
-interface StoredSession {
-  user: AuthenticatedUser;
-  accessToken: string | null;
-  supabaseToken?: string | null;
 }
 
 interface AuthContextValue {
@@ -64,18 +49,6 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-// Bootstrap admins: emails listed here are always admin (used for the very first
-// admin before the members list / Supabase exists). Comma-separated env var.
-const BOOTSTRAP_ADMIN_EMAILS = (process.env.EXPO_PUBLIC_ADMIN_EMAILS ?? '')
-  .toLowerCase()
-  .split(',')
-  .map((s: string) => s.trim())
-  .filter(Boolean);
-
-// Role is NOT guessed from the email (staff and students share email domains).
-// New sign-ins default to "student"; staff/admin come from the members backend
-// (Supabase, or local fallback) or the bootstrap admin allowlist.
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -85,122 +58,87 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
-  // On web the redirect URI is this page's own URL (so it round-trips back here).
-  // On native it's the app's custom scheme.
-  const redirectUri = useMemo(() => {
-    if (isWeb && typeof window !== 'undefined') {
-      return window.location.origin + window.location.pathname;
+  // Microsoft sign-in is available whenever the backend is configured.
+  const isAzureConfigured = isSupabaseConfigured;
+
+  async function applySession(sb: any, session: any) {
+    const u = session?.user;
+    if (!u) return;
+    const email = (u.email ?? u.user_metadata?.email ?? '').toLowerCase();
+
+    if (ALLOWED_DOMAINS.length && !ALLOWED_DOMAINS.includes(email.split('@')[1] ?? '')) {
+      try { await sb.auth.signOut(); } catch {}
+      setUser(null);
+      setAccessToken(null);
+      setAuthError('This Microsoft account is not authorized for Red Alpha. Please sign in with your organization account.');
+      setIsAuthenticating(false);
+      return;
     }
-    return AuthSession.makeRedirectUri({ scheme: 'bootcampcompanion', path: 'auth' });
-  }, []);
 
-  // Authorization Code + PKCE — the flow Entra "Single-page application" expects.
-  const [request, response, promptAsync] = AuthSession.useAuthRequest(
-    {
-      clientId: AZURE_AD_CLIENT_ID || 'not-configured',
-      scopes: ['openid', 'profile', 'email', 'User.Read', 'offline_access'],
-      redirectUri,
-      responseType: AuthSession.ResponseType.Code,
-      usePKCE: true,
-    },
-    discovery
-  );
+    const members = await mgmt.fetchMembers().catch(() => [] as StaffMember[]);
+    const me = members.find((m) => m.email.toLowerCase() === email);
+    if (me && me.status === 'invited') { try { await mgmt.upsertMember({ ...me, status: 'active' }); } catch {} }
+    const role: UserRole = BOOTSTRAP_ADMIN_EMAILS.includes(email) ? 'admin' : (me ? me.role : 'student');
 
+    const meta = u.user_metadata ?? {};
+    setUser({ id: u.id, displayName: meta.full_name || meta.name || email, email, role });
+    setAccessToken(session.access_token ?? null);
+    setAuthError(null);
+    setIsAuthenticating(false);
+    await storeDelete(DEMO_KEY); // a real session supersedes any demo session
+  }
+
+  // Initialise: restore flags + Supabase session (or demo session).
   useEffect(() => {
+    let cleanup: (() => void) | undefined;
     (async () => {
       try {
-        const [rawSession, storedCohort, storedProfileComplete] = await Promise.all([
-          storeGet(SESSION_STORAGE_KEY),
+        const [storedCohort, storedProfile, demoRaw] = await Promise.all([
           storeGet(COHORT_STORAGE_KEY),
           storeGet(PROFILE_COMPLETE_KEY),
+          storeGet(DEMO_KEY),
         ]);
-        if (rawSession) {
-          const stored: StoredSession = JSON.parse(rawSession);
-          setUser(stored.user);
-          setAccessToken(stored.accessToken);
-          setSupabaseAccessToken(stored.supabaseToken ?? null);
-        }
         if (storedCohort) setCohortId(storedCohort);
-        if (storedProfileComplete === 'true') setProfileComplete(true);
+        if (storedProfile === 'true') setProfileComplete(true);
+
+        const sb = getSupabaseClient();
+        if (sb) {
+          const { data } = await sb.auth.getSession();
+          if (data?.session) {
+            await applySession(sb, data.session);
+          } else if (demoRaw) {
+            setUser(JSON.parse(demoRaw));
+          }
+          const { data: listener } = sb.auth.onAuthStateChange((_event: string, session: any) => {
+            if (session) applySession(sb, session);
+          });
+          cleanup = () => listener?.subscription?.unsubscribe?.();
+        } else if (demoRaw) {
+          setUser(JSON.parse(demoRaw));
+        }
       } catch {
-        // ignore corrupt/unavailable storage
+        // ignore
       } finally {
         setIsLoading(false);
       }
     })();
+    return () => { if (cleanup) cleanup(); };
   }, []);
 
-  async function persistSession(session: StoredSession | null) {
-    if (session) await storeSet(SESSION_STORAGE_KEY, JSON.stringify(session));
-    else await storeDelete(SESSION_STORAGE_KEY);
-  }
-
-  // Trigger the Microsoft sign-in. The result is handled by the effect below so it
-  // works for both popup and redirect flows (no manual button click needed after auth).
-  function signInWithMicrosoft() {
+  async function signInWithMicrosoft() {
     setAuthError(null);
-    if (!isAzureConfigured) { setAuthError('Microsoft sign-in is not configured.'); return Promise.resolve(); }
+    const sb = getSupabaseClient();
+    if (!sb) { setAuthError('Sign-in is not configured yet.'); return; }
     setIsAuthenticating(true);
-    return promptAsync().then(() => undefined);
-  }
-
-  // Handle the OAuth response automatically.
-  useEffect(() => {
-    if (!response) return;
-    if (response.type === 'success' && response.params?.code) {
-      completeMicrosoftSignIn(response.params.code).catch((e: any) => {
-        setSupabaseAccessToken(null);
-        setAuthError(e?.message ?? 'Sign-in failed. Please try again.');
-        setIsAuthenticating(false);
-      });
-    } else if (response.type === 'error') {
-      setAuthError(response.error?.message ?? 'Sign-in failed. Please try again.');
-      setIsAuthenticating(false);
-    } else if (response.type === 'cancel' || response.type === 'dismiss') {
-      setIsAuthenticating(false);
-    }
-  }, [response]);
-
-  async function completeMicrosoftSignIn(code: string) {
-    const tokenResult = await AuthSession.exchangeCodeAsync(
-      { clientId: AZURE_AD_CLIENT_ID, code, redirectUri, extraParams: { code_verifier: request?.codeVerifier ?? '' } },
-      discovery
-    );
-    const token = tokenResult.accessToken;
-    if (!token) throw new Error('Sign-in failed: no access token returned.');
-    const supabaseToken = tokenResult.idToken ?? null;
-    setSupabaseAccessToken(supabaseToken);
-
-    // Reject accounts the backend won't accept (e.g. outside your organization).
-    if (isSupabaseConfigured) {
-      const ok = await mgmt.verifyBackendAccess();
-      if (!ok) throw new Error('This Microsoft account is not authorized for Red Alpha. Please sign in with your organization account.');
-    }
-
-    const profileResponse = await fetch('https://graph.microsoft.com/v1.0/me', {
-      headers: { Authorization: `Bearer ${token}` },
+    const redirectTo = isWeb && typeof window !== 'undefined'
+      ? window.location.origin + window.location.pathname
+      : 'bootcampcompanion://auth';
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'azure',
+      options: { scopes: 'openid profile email', redirectTo },
     });
-    if (!profileResponse.ok) throw new Error('Could not load your Microsoft profile.');
-    const profile = await profileResponse.json();
-    const email: string = profile.mail || profile.userPrincipalName || '';
-
-    const members = await mgmt.fetchMembers().catch(() => [] as StaffMember[]);
-    const me = members.find((m) => m.email.toLowerCase() === email.toLowerCase());
-    if (me && me.status === 'invited') { await mgmt.upsertMember({ ...me, status: 'active' }); }
-    const role: UserRole = BOOTSTRAP_ADMIN_EMAILS.includes(email.toLowerCase()) ? 'admin' : (me ? me.role : 'student');
-
-    const authenticatedUser: AuthenticatedUser = {
-      id: profile.id,
-      displayName: profile.displayName ?? email,
-      email,
-      role,
-    };
-
-    setUser(authenticatedUser);
-    setAccessToken(token);
-    setAuthError(null);
-    setIsAuthenticating(false);
-    await persistSession({ user: authenticatedUser, accessToken: token, supabaseToken });
+    if (error) { setAuthError(error.message); setIsAuthenticating(false); }
+    // Web: a full-page redirect happens; the session is handled on return by applySession.
   }
 
   async function signInWithDemoAccount(role: UserRole) {
@@ -210,11 +148,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         : role === 'staff'
         ? { id: 'demo-staff-1', displayName: 'Demo Staff Member', email: 'demo.staff@staff.bootcamp.sg', role: 'staff' }
         : { id: 'demo-student-1', displayName: 'Alex Chen', email: 'alex.chen@students.bootcamp.sg', role: 'student' };
-
     setUser(demoUser);
     setAccessToken(null);
-    setSupabaseAccessToken(null);
-    await persistSession({ user: demoUser, accessToken: null, supabaseToken: null });
+    await storeSet(DEMO_KEY, JSON.stringify(demoUser));
   }
 
   async function selectCohort(id: string) {
@@ -228,12 +164,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    const sb = getSupabaseClient();
+    try { if (sb) await sb.auth.signOut(); } catch {}
     setUser(null);
     setAccessToken(null);
-    setSupabaseAccessToken(null);
     setCohortId(null);
     setProfileComplete(false);
-    await persistSession(null);
+    setAuthError(null);
+    await storeDelete(DEMO_KEY);
     await storeDelete(COHORT_STORAGE_KEY);
     await storeDelete(PROFILE_COMPLETE_KEY);
   }

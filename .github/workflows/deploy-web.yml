@@ -49,6 +49,7 @@ jobs:
           EXPO_PUBLIC_AZURE_AD_CLIENT_ID: ${{ secrets.EXPO_PUBLIC_AZURE_AD_CLIENT_ID }}
           EXPO_PUBLIC_AZURE_AD_TENANT_ID: ${{ secrets.EXPO_PUBLIC_AZURE_AD_TENANT_ID }}
           EXPO_PUBLIC_ADMIN_EMAILS: ${{ secrets.EXPO_PUBLIC_ADMIN_EMAILS }}
+          EXPO_PUBLIC_ALLOWED_EMAIL_DOMAINS: ${{ secrets.EXPO_PUBLIC_ALLOWED_EMAIL_DOMAINS }}
           EXPO_PUBLIC_API_BASE_URL: ${{ secrets.EXPO_PUBLIC_API_BASE_URL }}
         run: npx expo export --platform web
 
