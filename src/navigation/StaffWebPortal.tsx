@@ -475,15 +475,15 @@ function TopBar({ title, subtitle, userName, userEmail, userRole, onSignOut, onS
 }
 
 const tb = StyleSheet.create({
-  root: { height: LAYOUT.header, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border, paddingHorizontal: LAYOUT.pad, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  root: { height: LAYOUT.header, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border, paddingHorizontal: LAYOUT.pad, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 100 },
   title: { fontSize: 17, fontWeight: '700', color: C.text, letterSpacing: -0.3 },
   sub: { fontSize: 12, color: C.textMute, marginTop: 1, fontWeight: '500' },
   userChip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4, paddingHorizontal: 4, paddingRight: 12, borderRadius: 20, borderWidth: 1, borderColor: C.border },
   uAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.text, alignItems: 'center', justifyContent: 'center' },
   uAvatarText: { color: '#fff', fontSize: 11.5, fontWeight: '700' },
   uName: { fontSize: 13, fontWeight: '600', color: C.textMid, maxWidth: 180 },
-  overlay: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 } as any,
-  menu: { position: 'absolute', top: 44, right: 0, minWidth: 220, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, zIndex: 50 },
+  overlay: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 110 } as any,
+  menu: { position: 'absolute', top: 44, right: 0, minWidth: 220, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, zIndex: 120 },
   menuName: { fontSize: 13.5, fontWeight: '700', color: C.text },
   menuMeta: { fontSize: 12, color: C.textMute, marginTop: 2 },
   roleTag: { alignSelf: 'flex-start', marginTop: 8, backgroundColor: C.slateSoft, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12 },
