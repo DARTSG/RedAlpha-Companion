@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { fetchAnnouncements } from '@/data/api';
+import { reactToAnnouncement } from '@/data/managementApi';
 import { Announcement, AnnouncementType, Reaction } from '@/types';
 import { colors, radius, shadow, spacing, typography } from '@/theme';
 
@@ -40,21 +41,29 @@ const AUTHOR_COLORS: Record<string, string> = {
 // Achievement card
 // ---------------------------------------------------------------------------
 
+const DEFAULT_REACTIONS: Reaction[] = [
+  { emoji: '👏', label: 'Praise', count: 0 },
+  { emoji: '🎉', label: 'Congrats', count: 0 },
+  { emoji: '💪', label: 'Respect', count: 0 },
+];
+
 function AchievementCard({ item }: { item: Announcement }) {
-  const [reactions, setReactions] = useState<Reaction[]>(item.reactions ?? []);
+  const [reactions, setReactions] = useState<Reaction[]>(
+    item.reactions?.length ? item.reactions : DEFAULT_REACTIONS
+  );
   const [praised, setPraised] = useState<string | null>(null);
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   function handleReact(emoji: string) {
-    if (praised === emoji) return; // already reacted
+    if (praised) return; // one reaction per session
     Animated.sequence([
       Animated.spring(scaleAnim, { toValue: 1.08, useNativeDriver: true, speed: 40, bounciness: 8 }),
       Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 4 }),
     ]).start();
-    setReactions((prev) =>
-      prev.map((r) => (r.emoji === emoji ? { ...r, count: r.count + 1 } : r))
-    );
+    const label = reactions.find((r) => r.emoji === emoji)?.label ?? 'Praise';
+    setReactions((prev) => prev.map((r) => (r.emoji === emoji ? { ...r, count: r.count + 1 } : r)));
     setPraised(emoji);
+    reactToAnnouncement(item.id, emoji, label); // fire-and-forget persist
   }
 
   return (
@@ -69,26 +78,33 @@ function AchievementCard({ item }: { item: Announcement }) {
             <Text style={{ fontSize: 28 }}>🏆</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <View style={styles.certBadge}>
-              <Text style={styles.certProvider}>{item.certProvider}</Text>
-            </View>
-            <Text style={styles.certName}>{item.certificationName}</Text>
+            {item.certProvider ? (
+              <View style={styles.certBadge}>
+                <Text style={styles.certProvider}>{item.certProvider}</Text>
+              </View>
+            ) : null}
+            <Text style={styles.certName}>{item.certificationName || item.title || 'Achievement'}</Text>
+            {!item.achieverName && (
+              <Text style={styles.achieverCohort}>{timeAgo(item.postedAt)}</Text>
+            )}
           </View>
         </View>
 
         {/* Achiever */}
-        <View style={styles.achieverRow}>
-          <View style={styles.achieverAvatar}>
-            <Text style={styles.achieverInitials}>{initials(item.achieverName ?? '')}</Text>
+        {item.achieverName ? (
+          <View style={styles.achieverRow}>
+            <View style={styles.achieverAvatar}>
+              <Text style={styles.achieverInitials}>{initials(item.achieverName)}</Text>
+            </View>
+            <View>
+              <Text style={styles.achieverName}>{item.achieverName}</Text>
+              <Text style={styles.achieverCohort}>{[item.achieverCohort, timeAgo(item.postedAt)].filter(Boolean).join(' · ')}</Text>
+            </View>
           </View>
-          <View>
-            <Text style={styles.achieverName}>{item.achieverName}</Text>
-            <Text style={styles.achieverCohort}>{item.achieverCohort} · {timeAgo(item.postedAt)}</Text>
-          </View>
-        </View>
+        ) : null}
 
         {/* Message */}
-        <Text style={styles.achievementMsg}>{item.body}</Text>
+        {item.body ? <Text style={styles.achievementMsg}>{item.body}</Text> : null}
 
         {/* Reactions */}
         <View style={styles.reactionsRow}>
@@ -109,7 +125,7 @@ function AchievementCard({ item }: { item: Announcement }) {
             </TouchableOpacity>
           ))}
           {!praised && (
-            <Text style={styles.praiseHint}>Tap to praise →</Text>
+            <Text style={styles.praiseHint}>← Tap to praise</Text>
           )}
         </View>
 

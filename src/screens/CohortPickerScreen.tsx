@@ -51,10 +51,18 @@ function CohortCard({
     onPress();
   };
 
-  const start = new Date(cohort.startDate);
-  const end = new Date(cohort.endDate);
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const dateRange = `${monthNames[start.getMonth()]} ${start.getFullYear()} – ${monthNames[end.getMonth()]} ${end.getFullYear()}`;
+  const fmt = (iso?: string) => {
+    if (!iso || iso === 'TBD') return null;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? null : `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+  };
+  const startLabel = fmt(cohort.startDate);
+  const endLabel = fmt(cohort.endDate);
+  const dateRange = startLabel && endLabel ? `${startLabel} – ${endLabel}`
+    : startLabel ? `Starts ${startLabel}`
+    : 'Dates to be confirmed';
+  const shortCode = cohort.name.match(/\d+/)?.[0] ?? cohort.name.slice(0, 2).toUpperCase();
 
   return (
     <Animated.View style={{ opacity: anim, transform: [{ scale }] }}>
@@ -72,7 +80,7 @@ function CohortCard({
             <View style={styles.cohortCardLeft}>
               <View style={[styles.cohortDot, { backgroundColor: cohort.color + '22', borderColor: cohort.color + '55' }]}>
                 <Text style={[styles.cohortDotText, { color: cohort.color }]}>
-                  {cohort.name.replace('Cohort ', '')}
+                  {shortCode}
                 </Text>
               </View>
             </View>
@@ -83,11 +91,13 @@ function CohortCard({
               <Text style={styles.cohortDate}>{dateRange}</Text>
 
               <View style={styles.cohortMeta}>
-                <View style={[styles.metaChip, { backgroundColor: cohort.color + '18' }]}>
-                  <Text style={[styles.metaChipText, { color: cohort.color }]}>
-                    {cohort.studentCount} students
-                  </Text>
-                </View>
+                {cohort.studentCount > 0 && (
+                  <View style={[styles.metaChip, { backgroundColor: cohort.color + '18' }]}>
+                    <Text style={[styles.metaChipText, { color: cohort.color }]}>
+                      {cohort.studentCount} students
+                    </Text>
+                  </View>
+                )}
                 {cohort.active && (
                   <View style={[styles.metaChip, { backgroundColor: colors.accentLight }]}>
                     <Text style={[styles.metaChipText, { color: colors.accent }]}>Active</Text>
@@ -118,7 +128,17 @@ export function CohortPickerScreen() {
   const btnAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    fetchCohorts(accessToken).then(setCohorts);
+    fetchCohorts(accessToken).then((all) => {
+      // Only cohorts a new student can join: active, and not already finished.
+      const today = new Date().toISOString().slice(0, 10);
+      const open = all.filter((c) => {
+        if (!c.active) return false;
+        const end = c.endDate && c.endDate !== 'TBD' ? c.endDate : null;
+        return !end || end >= today;
+      });
+      const sorted = [...(open.length ? open : all)].sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
+      setCohorts(sorted);
+    });
     Animated.timing(headerAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
     Animated.timing(btnAnim, { toValue: 1, duration: 400, delay: 600, useNativeDriver: true }).start();
   }, []);

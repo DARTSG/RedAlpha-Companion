@@ -46,7 +46,19 @@ export async function fetchScheduleWeeks(_accessToken: string | null): Promise<S
   return delay(mockScheduleWeeks);
 }
 
+/** Grades via the moodle-grades Edge Function (token stays server-side).
+ *  Returns [] until Moodle is configured; mock data only in demo mode. */
 export async function fetchMoodleScores(_accessToken: string | null): Promise<MoodleCourseScore[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      try {
+        const { data, error } = await sb.functions.invoke('moodle-grades', { body: {} });
+        if (!error && Array.isArray(data?.scores)) return data.scores as MoodleCourseScore[];
+      } catch { /* not deployed yet */ }
+    }
+    return [];
+  }
   return delay(mockMoodleScores);
 }
 

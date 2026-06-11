@@ -117,7 +117,15 @@ export function GradesScreen() {
       </Animated.View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {scores.map((score, i) => (
+        {scores.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={{ fontSize: 36, marginBottom: spacing.md }}>📊</Text>
+            <Text style={styles.emptyTitle}>No grades yet</Text>
+            <Text style={styles.emptyText}>
+              Your grades sync from Moodle. They'll appear here once your modules begin.
+            </Text>
+          </View>
+        ) : scores.map((score, i) => (
           <GradeCard key={score.courseId} score={score} index={i} />
         ))}
         <View style={{ height: spacing.xxxl }} />
@@ -161,4 +169,7 @@ const styles = StyleSheet.create({
   progressLabel: { ...typography.caption, color: colors.textSecondary },
   progressValue: { ...typography.caption, color: colors.textPrimary, fontWeight: '600' },
   passingNote: { ...typography.caption, color: colors.textTertiary, marginTop: 2 },
+  empty: { alignItems: 'center', paddingVertical: spacing.huge, paddingHorizontal: spacing.xxl },
+  emptyTitle: { ...typography.heading, color: colors.textPrimary, marginBottom: spacing.xs },
+  emptyText: { ...typography.bodySmall, color: colors.textTertiary, textAlign: 'center', lineHeight: 20 },
 });

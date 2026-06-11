@@ -87,3 +87,31 @@ begin
   new.performance_reports  := old.performance_reports;
   return new;
 end $$;
+
+-- ----------------------------------------------------------------------------
+-- Announcement reactions (students can praise achievements). Writes to
+-- announcements are staff-only, so reactions go through a SECURITY DEFINER RPC.
+-- ----------------------------------------------------------------------------
+alter table public.announcements add column if not exists reactions jsonb default '[]'::jsonb;
+
+create or replace function public.react_to_announcement(p_id text, p_emoji text, p_label text)
+returns void language plpgsql security definer set search_path = public as $$
+declare cur jsonb;
+begin
+  if coalesce(auth.jwt() ->> 'role', '') <> 'authenticated' then
+    raise exception 'not allowed';
+  end if;
+  select coalesce(reactions, '[]'::jsonb) into cur from public.announcements where id = p_id;
+  if cur is null then return; end if;
+  if exists (select 1 from jsonb_array_elements(cur) e where e->>'emoji' = p_emoji) then
+    cur := (select jsonb_agg(case when e->>'emoji' = p_emoji
+              then jsonb_set(e, '{count}', to_jsonb(coalesce((e->>'count')::int, 0) + 1))
+              else e end)
+            from jsonb_array_elements(cur) e);
+  else
+    cur := cur || jsonb_build_array(jsonb_build_object('emoji', p_emoji, 'label', p_label, 'count', 1));
+  end if;
+  update public.announcements set reactions = cur where id = p_id;
+end $$;
+revoke all on function public.react_to_announcement(text, text, text) from public, anon;
+grant execute on function public.react_to_announcement(text, text, text) to authenticated;

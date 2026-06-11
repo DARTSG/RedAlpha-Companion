@@ -172,7 +172,15 @@ export function savePlacement(studentId: string, o: PlacementOverride): void {
 // ---------------------------------------------------------------------------
 
 function mapAnnouncement(r: any): Announcement {
-  return { id: String(r.id), type: r.type, title: r.title, body: r.body ?? '', postedAt: r.posted_at ?? new Date().toISOString(), audience: r.audience ?? 'all', pinned: r.pinned ?? undefined, author: r.author ?? undefined, achieverName: r.achiever_name ?? undefined, achieverCohort: r.achiever_cohort ?? undefined, certificationName: r.certification_name ?? undefined, certProvider: r.cert_provider ?? undefined };
+  return { id: String(r.id), type: r.type, title: r.title, body: r.body ?? '', postedAt: r.posted_at ?? new Date().toISOString(), audience: r.audience ?? 'all', pinned: r.pinned ?? undefined, author: r.author ?? undefined, achieverName: r.achiever_name ?? undefined, achieverCohort: r.achiever_cohort ?? undefined, certificationName: r.certification_name ?? undefined, certProvider: r.cert_provider ?? undefined, reactions: Array.isArray(r.reactions) && r.reactions.length ? r.reactions : undefined };
+}
+
+/** Students praise an achievement post (RLS-safe RPC; staff-only writes stay intact). */
+export async function reactToAnnouncement(id: string, emoji: string, label: string): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  try { await sb.rpc('react_to_announcement', { p_id: id, p_emoji: emoji, p_label: label }); } catch {}
 }
 export async function getAnnouncements(): Promise<Announcement[]> {
   if (isSupabaseConfigured) {
