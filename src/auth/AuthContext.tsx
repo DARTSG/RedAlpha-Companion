@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const members = await mgmt.fetchMembers().catch(() => [] as StaffMember[]);
     const me = members.find((m) => m.email.toLowerCase() === email);
-    if (me && me.status === 'invited') { try { await mgmt.upsertMember({ ...me, status: 'active' }); } catch {} }
+    if (me && me.status === 'invited') { try { await mgmt.activateMyMembership(); } catch {} }
     const role: UserRole = BOOTSTRAP_ADMIN_EMAILS.includes(email) ? 'admin' : (me ? me.role : 'student');
 
     const meta = u.user_metadata ?? {};

@@ -62,6 +62,7 @@ export async function getCohorts(): Promise<Cohort[]> {
   if (isSupabaseConfigured) {
     const sb = getSupabaseClient();
     if (sb) { const { data, error } = await sb.from('cohorts').select('*').order('name', { ascending: true }); if (!error && Array.isArray(data)) return data.map(mapCohort); }
+    return [];
   }
   return read<Cohort[] | null>(K.cohorts, null) ?? mockCohorts;
 }
@@ -91,6 +92,7 @@ export async function getCourses(): Promise<Course[]> {
   if (isSupabaseConfigured) {
     const sb = getSupabaseClient();
     if (sb) { const { data, error } = await sb.from('courses').select('*').order('created_at', { ascending: false }); if (!error && Array.isArray(data)) return data.map(mapCourse); }
+    return [];
   }
   return read<Course[] | null>(K.courses, null) ?? mockCourses;
 }
@@ -176,6 +178,7 @@ export async function getAnnouncements(): Promise<Announcement[]> {
   if (isSupabaseConfigured) {
     const sb = getSupabaseClient();
     if (sb) { const { data, error } = await sb.from('announcements').select('*').order('posted_at', { ascending: false }); if (!error && Array.isArray(data)) return data.map(mapAnnouncement); }
+    return [];
   }
   return read<Announcement[] | null>(K.announcements, null) ?? mockAnnouncements;
 }
@@ -216,6 +219,7 @@ export async function fetchMembers(): Promise<StaffMember[]> {
       const { data, error } = await sb.from('staff_members').select('*').order('created_at', { ascending: true });
       if (!error && Array.isArray(data)) return data.map(mapMemberRow);
     }
+    return [];
   }
   return read<StaffMember[] | null>(K.members, null) ?? MEMBERS_SEED;
 }
@@ -244,6 +248,16 @@ export async function removeMember(id: string): Promise<void> {
   }
   const list = (read<StaffMember[] | null>(K.members, null) ?? MEMBERS_SEED).filter((m) => m.id !== id);
   write(K.members, list);
+}
+
+/** RPC: an invited member activates their OWN row on first real sign-in.
+ *  (Admin-only write policies reject a direct upsert, so this goes through a
+ *  SECURITY DEFINER function — see supabase-rls-hardening.sql.) */
+export async function activateMyMembership(): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  try { await sb.rpc('activate_membership'); } catch {}
 }
 
 /** Returns false when the current user's token is rejected by the backend
@@ -302,8 +316,22 @@ export async function fetchInterviews(studentId: string): Promise<InterviewRecor
       const { data, error } = await sb.from('interviews').select('*').eq('student_id', studentId).order('date', { ascending: false });
       if (!error && Array.isArray(data)) return data.map(mapInterview);
     }
+    return [];
   }
   return read<InterviewRecord[]>(K.interviews, []).filter((i) => i.studentId === studentId);
+}
+
+/** Every interview record (used by the "interviewed for" filter). */
+export async function fetchAllInterviews(): Promise<InterviewRecord[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      const { data, error } = await sb.from('interviews').select('*');
+      if (!error && Array.isArray(data)) return data.map(mapInterview);
+    }
+    return [];
+  }
+  return read<InterviewRecord[]>(K.interviews, []);
 }
 export async function saveInterview(rec: InterviewRecord): Promise<void> {
   if (isSupabaseConfigured) {
@@ -328,7 +356,7 @@ export async function deleteInterview(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function mapIntake(r: any): IntakeProgramme {
-  return { id: String(r.id), quarter: r.quarter, programNumber: r.program_number, domain: r.domain, quantity: r.quantity, status: r.status, startDate: r.start_date ?? undefined, note: r.note ?? undefined };
+  return { id: String(r.id), quarter: r.quarter, programNumber: r.program_number, domain: r.domain, quantity: r.quantity, status: r.status, startDate: r.start_date ?? undefined, note: r.note ?? undefined, syllabusUrl: r.syllabus_url ?? undefined, syllabusFilename: r.syllabus_filename ?? undefined };
 }
 export async function fetchIntake(): Promise<IntakeProgramme[]> {
   if (isSupabaseConfigured) {
@@ -337,13 +365,14 @@ export async function fetchIntake(): Promise<IntakeProgramme[]> {
       const { data, error } = await sb.from('intake_programmes').select('*').order('quarter', { ascending: true });
       if (!error && Array.isArray(data)) return data.map(mapIntake);
     }
+    return [];
   }
   return read<IntakeProgramme[]>(K.intake, []);
 }
 export async function saveIntake(rec: IntakeProgramme): Promise<void> {
   if (isSupabaseConfigured) {
     const sb = getSupabaseClient();
-    if (sb) { await sb.from('intake_programmes').upsert({ id: rec.id, quarter: rec.quarter, program_number: rec.programNumber, domain: rec.domain, quantity: rec.quantity, status: rec.status, start_date: rec.startDate ?? null, note: rec.note ?? null }); return; }
+    if (sb) { await sb.from('intake_programmes').upsert({ id: rec.id, quarter: rec.quarter, program_number: rec.programNumber, domain: rec.domain, quantity: rec.quantity, status: rec.status, start_date: rec.startDate ?? null, note: rec.note ?? null, syllabus_url: rec.syllabusUrl ?? null, syllabus_filename: rec.syllabusFilename ?? null }); return; }
   }
   const all = read<IntakeProgramme[]>(K.intake, []);
   const i = all.findIndex((x) => x.id === rec.id);

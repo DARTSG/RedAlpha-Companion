@@ -131,6 +131,25 @@ export interface Certification {
   credentialUrl?: string;
   badgeUrl?: string;
   track: CourseTrack;
+  /** false = student-reported, awaiting staff verification. undefined/true = verified. */
+  verified?: boolean;
+}
+
+/** An upskilling course a trainee has taken (staff-recorded). */
+export interface UpskillingTaken {
+  id: string;
+  title: string;
+  provider?: string;
+  track?: string;
+  completedAt?: string;   // ISO date
+}
+
+/** Year-on-year performance report (file lives on SharePoint; we store the URL). */
+export interface PerformanceReport {
+  year: number;
+  url: string;
+  filename?: string;
+  uploadedAt?: string;
 }
 
 export type StudentLifecycleStage =
@@ -138,6 +157,7 @@ export type StudentLifecycleStage =
   | 'job-hunting'
   | 'on-placement'
   | 'bond-completed'
+  | 'extended'        // post-bond extension to complete the placement opportunity (PO)
   | 'withdrawn';
 
 export interface StudentStats {
@@ -172,6 +192,8 @@ export interface PlacementRecord {
   status: 'active' | 'completed' | 'terminated';  // terminated = let go / fired
   months?: number;   // total months of service (authoritative when dates are messy)
   note?: string;
+  jdUrl?: string;        // job description file (SharePoint URL)
+  jdFilename?: string;
 }
 
 export interface StaffStudentRecord {
@@ -205,6 +227,8 @@ export interface StaffStudentRecord {
   reportingOfficer?: string;
   roEmail?: string;
   bondEndDate?: string;
+  upskilling?: UpskillingTaken[];
+  performanceReports?: PerformanceReport[];
 }
 
 export interface InterviewRecord {
@@ -227,6 +251,19 @@ export interface IntakeProgramme {
   status: IntakeStatus;
   startDate?: string;
   note?: string;
+  syllabusUrl?: string;       // training syllabus file (SharePoint URL) to share with clients
+  syllabusFilename?: string;
+}
+
+/** A certification a student reports as completed; staff verify before it shows fully. */
+export interface CertSubmission {
+  id: string;
+  userId: string;
+  name: string;
+  provider?: string;
+  earnedAt?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt?: string;
 }
 
 export interface StudentProfile {

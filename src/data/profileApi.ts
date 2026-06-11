@@ -8,9 +8,10 @@
 
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import { PlacementInfo, PlacementRecord, StaffStudentRecord, StudentLifecycleStage, StudentProfile } from '@/types';
+import { CertSubmission, Certification, PerformanceReport, PlacementInfo, PlacementRecord, StaffStudentRecord, StudentLifecycleStage, StudentProfile, UpskillingTaken } from '@/types';
 import { mockStaffStudents } from './mockData';
 import { isSupabaseConfigured, getSupabaseClient } from '@/lib/supabase';
+import { uploadFileToSharePoint } from './fileApi';
 
 const PROFILE_KEY_PREFIX = 'ra.profile.v1.';
 const PLACEMENT_KEY_PREFIX = 'ra.placement.v1.';
@@ -106,9 +107,9 @@ export async function deleteStudentProfile(userId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Uploads a CV file. Returns the accessible URL/URI for the CV.
- * - Supabase mode: uploads to 'cvs' bucket, returns signed URL
- * - Demo mode: returns the local file URI (stored in profile)
+ * Uploads a CV. Files live on SharePoint (via the sharepoint-upload Edge
+ * Function); only the returned URL is stored in Supabase.
+ * Demo mode: returns the local file URI.
  */
 export async function uploadCV(
   userId: string,
@@ -116,38 +117,8 @@ export async function uploadCV(
   filename: string,
   mimeType: string = 'application/pdf'
 ): Promise<string> {
-  if (isSupabaseConfigured) {
-    const sb = getSupabaseClient();
-
-    // Read file as base64 on native, as ArrayBuffer on web
-    let fileData: any;
-    if (Platform.OS === 'web') {
-      const response = await fetch(fileUri);
-      fileData = await response.arrayBuffer();
-    } else {
-      const FileSystem = require('expo-file-system');
-      const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: 'base64' });
-      // Convert base64 to Uint8Array
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      fileData = bytes;
-    }
-
-    const path = `${userId}/${Date.now()}_${filename}`;
-    const { data, error } = await sb.storage
-      .from('cvs')
-      .upload(path, fileData, { contentType: mimeType, upsert: true });
-    if (error) throw new Error(error.message);
-
-    // Return a signed URL valid for 1 year
-    const { data: urlData } = await sb.storage
-      .from('cvs')
-      .createSignedUrl(path, 60 * 60 * 24 * 365);
-    return urlData?.signedUrl ?? fileUri;
-  }
-  // Demo mode — store local URI as the "URL"
-  return fileUri;
+  const { url } = await uploadFileToSharePoint({ kind: 'cv', ownerId: userId, filename, uri: fileUri, mimeType });
+  return url;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +163,8 @@ export async function getAllStudents(_accessToken: string | null): Promise<Staff
       reportingOfficer: row.reporting_officer ?? undefined,
       roEmail: row.ro_email ?? undefined,
       placements: Array.isArray(row.placements) ? row.placements : undefined,
+      upskilling: Array.isArray(row.upskilling) ? row.upskilling : [],
+      performanceReports: Array.isArray(row.performance_reports) ? row.performance_reports : [],
     }));
   }
 
@@ -245,6 +218,45 @@ export async function updatePlacementInfo(
 }
 
 // ---------------------------------------------------------------------------
+// Certification submissions (student self-report -> staff verification)
+// ---------------------------------------------------------------------------
+
+function mapCertSub(r: any): CertSubmission {
+  return { id: String(r.id), userId: r.user_id, name: r.name, provider: r.provider ?? undefined, earnedAt: r.earned_at ?? undefined, status: r.status, createdAt: r.created_at ?? undefined };
+}
+
+/** Student: report a completed certification (goes to staff for verification). */
+export async function submitCertification(userId: string, name: string, provider?: string, earnedAt?: string): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  const { error } = await sb.from('cert_submissions').insert({ user_id: userId, name, provider: provider ?? null, earned_at: earnedAt ?? null, status: 'pending' });
+  if (error) throw new Error(error.message);
+}
+
+/** Own submissions (student) or, for staff, any student's submissions. */
+export async function fetchCertSubmissions(userId?: string, onlyPending = false): Promise<CertSubmission[]> {
+  if (!isSupabaseConfigured) return [];
+  const sb = getSupabaseClient();
+  if (!sb) return [];
+  let qy = sb.from('cert_submissions').select('*').order('created_at', { ascending: false });
+  if (userId) qy = qy.eq('user_id', userId);
+  if (onlyPending) qy = qy.eq('status', 'pending');
+  const { data, error } = await qy;
+  if (error || !Array.isArray(data)) return [];
+  return data.map(mapCertSub);
+}
+
+/** Staff: approve or reject a submission. */
+export async function reviewCertSubmission(id: string, status: 'approved' | 'rejected'): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  const { error } = await sb.from('cert_submissions').update({ status }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ---------------------------------------------------------------------------
 // Staff: full student record edit (Supabase). No-op in demo (handled locally).
 // ---------------------------------------------------------------------------
 
@@ -265,6 +277,9 @@ export interface StudentEdit {
   reportingOfficer?: string;
   roEmail?: string;
   bondEndDate?: string;
+  upskilling?: UpskillingTaken[];
+  performanceReports?: PerformanceReport[];
+  certifications?: Certification[];
 }
 
 export async function updateStudentRecord(studentId: string, p: StudentEdit): Promise<void> {
@@ -283,6 +298,9 @@ export async function updateStudentRecord(studentId: string, p: StudentEdit): Pr
     bond_months: p.bondMonths ?? null,
     bond_mode: p.bondMode ?? null,
     placements: p.placements ?? [],
+    upskilling: p.upskilling ?? [],
+    performance_reports: p.performanceReports ?? [],
+    certifications: p.certifications ?? [],
     placement_company: p.placementCompany ?? null,
     placement_role: p.placementRole ?? null,
     reporting_officer: p.reportingOfficer ?? null,

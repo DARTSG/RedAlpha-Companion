@@ -16,8 +16,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/auth/AuthContext';
-import { getStudentProfile, saveStudentProfile, uploadCV } from '@/data/profileApi';
-import { StudentProfile } from '@/types';
+import { fetchCertSubmissions, getStudentProfile, saveStudentProfile, submitCertification, uploadCV } from '@/data/profileApi';
+import { CertSubmission, StudentProfile } from '@/types';
 import { colors, radius, spacing, typography } from '@/theme';
 
 const MAX_CV_BYTES = 5 * 1024 * 1024;
@@ -39,6 +39,11 @@ export function ProfileScreen({ visible, onClose }: Props) {
   const [cvUrl, setCvUrl] = useState<string | undefined>();
   const [cvFilename, setCvFilename] = useState<string | undefined>();
   const [newCvFile, setNewCvFile] = useState<{ uri: string; name: string; size: number; mimeType: string } | null>(null);
+  const [certSubs, setCertSubs] = useState<CertSubmission[]>([]);
+  const [certName, setCertName] = useState('');
+  const [certProvider, setCertProvider] = useState('');
+  const [certDate, setCertDate] = useState('');
+  const [certSending, setCertSending] = useState(false);
 
   useEffect(() => {
     if (!visible || !user) return;
@@ -58,7 +63,24 @@ export function ProfileScreen({ visible, onClose }: Props) {
       }
       setLoading(false);
     });
+    fetchCertSubmissions(user.id).then(setCertSubs).catch(() => {});
   }, [visible]);
+
+  async function handleSubmitCert() {
+    if (!certName.trim()) { Alert.alert('Missing field', 'Please enter the certification name.'); return; }
+    setCertSending(true);
+    try {
+      await submitCertification(user!.id, certName.trim(), certProvider.trim() || undefined, certDate.trim() || undefined);
+      setCertName(''); setCertProvider(''); setCertDate('');
+      const subs = await fetchCertSubmissions(user!.id);
+      setCertSubs(subs);
+      Alert.alert('Submitted', 'Your certification was sent to Red Alpha staff for verification.');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Could not submit. Please try again.');
+    } finally {
+      setCertSending(false);
+    }
+  }
 
   async function handlePickCV() {
     try {
@@ -197,6 +219,52 @@ export function ProfileScreen({ visible, onClose }: Props) {
                 </TouchableOpacity>
               </Field>
 
+              <Field label="Certifications" hint="Verified by staff before they show">
+                {certSubs.length > 0 && (
+                  <View style={{ gap: spacing.xs, marginBottom: spacing.sm }}>
+                    {certSubs.map((c) => (
+                      <View key={c.id} style={s.cvRow}>
+                        <Text style={s.cvIcon}>🏅</Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.cvName} numberOfLines={1}>{c.name}</Text>
+                          {(c.provider || c.earnedAt) ? <Text style={s.cvSize}>{[c.provider, c.earnedAt].filter(Boolean).join(' · ')}</Text> : null}
+                        </View>
+                        <View style={[s.certStatus, c.status === 'approved' ? s.certApproved : c.status === 'rejected' ? s.certRejected : s.certPending]}>
+                          <Text style={[s.certStatusText, { color: c.status === 'approved' ? colors.accent : c.status === 'rejected' ? colors.error : colors.warning }]}>
+                            {c.status === 'approved' ? 'Verified' : c.status === 'rejected' ? 'Rejected' : 'Pending'}
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                <TextInput
+                  style={[s.input, { marginBottom: spacing.xs }]}
+                  value={certName}
+                  onChangeText={setCertName}
+                  placeholder="Certification name (e.g. OSCP)"
+                  placeholderTextColor={colors.textTertiary}
+                />
+                <TextInput
+                  style={[s.input, { marginBottom: spacing.xs }]}
+                  value={certProvider}
+                  onChangeText={setCertProvider}
+                  placeholder="Provider (e.g. OffSec)"
+                  placeholderTextColor={colors.textTertiary}
+                />
+                <TextInput
+                  style={[s.input, { marginBottom: spacing.sm }]}
+                  value={certDate}
+                  onChangeText={setCertDate}
+                  placeholder="Date earned (YYYY-MM-DD, optional)"
+                  placeholderTextColor={colors.textTertiary}
+                  maxLength={10}
+                />
+                <TouchableOpacity style={s.cvPicker} onPress={handleSubmitCert} activeOpacity={0.8} disabled={certSending}>
+                  <Text style={s.cvPickerText}>{certSending ? 'Submitting…' : '🏅 Submit for verification'}</Text>
+                </TouchableOpacity>
+              </Field>
+
               <View style={{ height: spacing.xxxl }} />
             </ScrollView>
           )}
@@ -301,4 +369,9 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   cvPickerText: { ...typography.bodySmall, color: colors.textSecondary, fontWeight: '600' },
+  certStatus: { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
+  certApproved: { backgroundColor: colors.accentLight },
+  certRejected: { backgroundColor: colors.errorLight },
+  certPending: { backgroundColor: colors.warningLight },
+  certStatusText: { ...typography.caption, fontWeight: '700' },
 });

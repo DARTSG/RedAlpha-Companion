@@ -28,6 +28,7 @@ const STAGE_CONFIG: Record<StudentLifecycleStage, { label: string; color: string
   'job-hunting':    { label: 'Job Hunting',     color: colors.warning, bg: colors.warningLight, dot: '🟡' },
   'on-placement':   { label: 'On Placement',    color: colors.accent,  bg: colors.accentLight,  dot: '🟢' },
   'bond-completed': { label: 'Bond Complete',   color: '#6366F1',      bg: '#EEF2FF',           dot: '🔵' },
+  'extended':       { label: 'Extended',        color: '#0E7090',      bg: '#ECFDFF',           dot: '🔷' },
   'withdrawn':      { label: 'Withdrawn',       color: colors.error,   bg: colors.errorLight,   dot: '🔴' },
 };
 

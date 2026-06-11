@@ -13,6 +13,7 @@ const STAGE_CONFIG: Record<StudentLifecycleStage, { label: string; color: string
   'job-hunting': { label: 'Job Hunting', color: colors.warning, icon: '🔍' },
   'on-placement': { label: 'On Placement', color: colors.accent, icon: '💼' },
   'bond-completed': { label: 'Bond Complete', color: colors.purple, icon: '🏅' },
+  extended: { label: 'Extended', color: '#06AED4', icon: '⏩' },
   withdrawn: { label: 'Withdrawn', color: colors.error, icon: '⛔' },
 };
 

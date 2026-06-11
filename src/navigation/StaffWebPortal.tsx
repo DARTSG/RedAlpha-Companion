@@ -25,12 +25,16 @@ import {
   fetchCohortGrowth,
   fetchStaffStudentRoster,
 } from '@/data/api';
-import { updatePlacementInfo, updateStudentRecord } from '@/data/profileApi';
+import * as DocumentPicker from 'expo-document-picker';
+import { fetchCertSubmissions, reviewCertSubmission, updatePlacementInfo, updateStudentRecord } from '@/data/profileApi';
+import { uploadFileToSharePoint } from '@/data/fileApi';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import * as mgmt from '@/data/managementApi';
 import {
   Announcement,
   AnnouncementType,
+  CertSubmission,
+  Certification,
   Cohort,
   CohortGrowthPoint,
   Course,
@@ -38,12 +42,14 @@ import {
   IntakeProgramme,
   IntakeStatus,
   InterviewRecord,
+  PerformanceReport,
   PlacementRecord,
   StaffMember,
   StaffRole,
   StaffStudentRecord,
   StudentLifecycleStage,
   SyllabusWeek,
+  UpskillingTaken,
 } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +87,7 @@ const STAGE: Record<StudentLifecycleStage, { label: string; fg: string; bg: stri
   'job-hunting':    { label: 'On Bench',     fg: '#B54708', bg: '#FFFAEB', dot: '#F79009' },
   'on-placement':   { label: 'On Placement', fg: '#067647', bg: '#ECFDF3', dot: '#17B26A' },
   'bond-completed': { label: 'Bond Done',    fg: '#6941C6', bg: '#F4F3FF', dot: '#7A5AF8' },
+  extended:         { label: 'Extended',     fg: '#0E7090', bg: '#ECFDFF', dot: '#06AED4' },
   withdrawn:        { label: 'Withdrawn',    fg: '#475467', bg: '#F2F4F7', dot: '#98A2B3' },
 };
 
@@ -91,7 +98,7 @@ const NEWS_CFG: Record<AnnouncementType, { label: string; icon: string; fg: stri
 };
 
 // Cross-tab navigation (click a stat -> jump to a filtered tab)
-type StudentFilter = { stage?: StudentLifecycleStage; cohort?: string } | null;
+type StudentFilter = { stages?: StudentLifecycleStage[]; cohort?: string; company?: string; programme?: string } | null;
 const NavCtx = React.createContext<{ navigate: (page: string, filter?: StudentFilter) => void; studentFilter: StudentFilter }>({ navigate: () => {}, studentFilter: null });
 function useNav() { return React.useContext(NavCtx); }
 
@@ -307,6 +314,27 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
 
 function Loader() { return <View style={u.centered}><ActivityIndicator color={C.brand} size="large" /></View>; }
 
+// File picking (web) + opening
+async function pickFile(): Promise<{ uri: string; name: string; mimeType?: string } | null> {
+  const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+  if (res.canceled || !res.assets?.length) return null;
+  const a = res.assets[0];
+  return { uri: a.uri, name: a.name ?? 'file', mimeType: a.mimeType };
+}
+function openUrl(url?: string) { if (url && typeof window !== 'undefined') window.open(url, '_blank'); }
+
+/** Full StudentEdit snapshot from an existing record (so partial saves don't wipe fields). */
+function toStudentEdit(s: StaffStudentRecord) {
+  return {
+    stage: s.stage, cohortName: s.cohortName, dateOfBirth: s.dateOfBirth, accountManager: s.accountManager,
+    contactNo: s.contactNo, personalEmail: s.personalEmail, dateJoined: s.dateJoined, ccpGrant: s.ccpGrant,
+    bondMonths: s.bondMonths, bondMode: s.bondMode, placements: s.placements ?? [],
+    placementCompany: s.placementCompany, placementRole: s.placementRole, reportingOfficer: s.reportingOfficer,
+    roEmail: s.roEmail, bondEndDate: s.bondEndDate, upskilling: s.upskilling ?? [],
+    performanceReports: s.performanceReports ?? [], certifications: s.certifications ?? [],
+  };
+}
+
 // CV download (opens real URL if present, else generates a placeholder file)
 function downloadCV(s: StaffStudentRecord) {
   if (s.cvUrl && typeof window !== 'undefined') { window.open(s.cvUrl, '_blank'); return; }
@@ -475,9 +503,11 @@ function Page({ children }: { children: React.ReactNode }) {
 // ---------------------------------------------------------------------------
 
 // Map the raw RA "model" status (or fall back to stage) to a dashboard category.
-function trainCategory(s: StaffStudentRecord): 'seconded' | 'buyout' | 'bench' | 'training' | 'graduated' | 'terminated' {
+function trainCategory(s: StaffStudentRecord): 'seconded' | 'buyout' | 'bench' | 'training' | 'graduated' | 'terminated' | 'extended' {
   const m = (s.model ?? '').toLowerCase();
+  if (s.stage === 'extended') return 'extended';
   if (m) {
+    if (m.includes('exten')) return 'extended';
     if (m.includes('secondment')) return 'seconded';
     if (m.includes('buy out') || m.includes('buyout')) return 'buyout';
     if (m.includes('bench')) return 'bench';
@@ -541,11 +571,11 @@ function WebDashboard() {
   }
 
   const list = students ?? [];
-  const cnt = { seconded: 0, buyout: 0, bench: 0, training: 0, graduated: 0, terminated: 0 } as Record<string, number>;
+  const cnt = { seconded: 0, buyout: 0, bench: 0, training: 0, graduated: 0, terminated: 0, extended: 0 } as Record<string, number>;
   list.forEach((s) => { cnt[trainCategory(s)]++; });
   const total = list.length;
-  const activeTrainees = cnt.seconded + cnt.bench + cnt.training;
-  const placementRate = activeTrainees ? Math.round((cnt.seconded / activeTrainees) * 100) : 0;
+  const activeTrainees = cnt.seconded + cnt.bench + cnt.training + cnt.extended;
+  const placementRate = activeTrainees ? Math.round(((cnt.seconded + cnt.extended) / activeTrainees) * 100) : 0;
 
   if (!students) return <Loader />;
 
@@ -572,26 +602,27 @@ function WebDashboard() {
   const progs = Object.entries(progMap).sort((a, b) => b[1].size - a[1].size);
   const pt = progs.reduce((a, [, v]) => ({ size: a.size + v.size, placed: a.placed + v.placed }), { size: 0, placed: 0 });
 
-  const donutSegs = [
-    { label: 'Currently Seconded', value: cnt.seconded, color: CHART.indigo },
+  const donutSegs: { label: string; value: number; color: string; stages?: StudentLifecycleStage[] }[] = [
+    { label: 'Currently Seconded', value: cnt.seconded, color: CHART.indigo, stages: ['on-placement'] },
+    { label: 'Extended (post-bond)', value: cnt.extended, color: CHART.teal, stages: ['extended'] },
     { label: 'Bond Buy-Out', value: cnt.buyout, color: CHART.sky },
-    { label: 'Not Yet Placed (Bench + Training)', value: cnt.bench + cnt.training, color: CHART.amber },
-    { label: 'Graduated / Released', value: cnt.graduated, color: CHART.emerald },
-    { label: 'Terminated', value: cnt.terminated, color: CHART.rose },
+    { label: 'Not Yet Placed (Bench + Training)', value: cnt.bench + cnt.training, color: CHART.amber, stages: ['job-hunting', 'on-course'] },
+    { label: 'Graduated / Released', value: cnt.graduated, color: CHART.emerald, stages: ['bond-completed'] },
+    { label: 'Terminated', value: cnt.terminated, color: CHART.rose, stages: ['withdrawn'] },
   ];
 
   return (
     <Page>
       <View style={u.kpiRow}>
-        <KpiCard label="Active Secondment" value={cnt.seconded} icon="briefcase" tint={CHART.indigo} soft={C.blueSoft} onPress={() => nav.navigate('students', { stage: 'on-placement' })} />
-        <KpiCard label="On The Bench" value={cnt.bench} icon="search" tint={C.amber} soft={C.amberSoft} onPress={() => nav.navigate('students', { stage: 'job-hunting' })} />
-        <KpiCard label="In Training" value={cnt.training} icon="book" tint={CHART.violet} soft={C.violetSoft} onPress={() => nav.navigate('students', { stage: 'on-course' })} />
+        <KpiCard label="Active Secondment" value={cnt.seconded} icon="briefcase" tint={CHART.indigo} soft={C.blueSoft} onPress={() => nav.navigate('students', { stages: ['on-placement'] })} />
+        <KpiCard label="On The Bench" value={cnt.bench} icon="search" tint={C.amber} soft={C.amberSoft} onPress={() => nav.navigate('students', { stages: ['job-hunting'] })} />
+        <KpiCard label="In Training" value={cnt.training} icon="book" tint={CHART.violet} soft={C.violetSoft} onPress={() => nav.navigate('students', { stages: ['on-course'] })} />
         <KpiCard label="Total Trainees" value={total} icon="users" tint={C.slate} soft={C.slateSoft} onPress={() => nav.navigate('students')} />
       </View>
       <View style={u.kpiRow}>
         <KpiCard label="Placement Rate" value={placementRate} suffix="%" icon="trending" tint={C.green} soft={C.greenSoft} />
         <KpiCard label="2026 Placements" value={placements2026} icon="cap" tint={CHART.emerald} soft={C.greenSoft} />
-        <KpiCard label="Active Clients" value={activeClients} icon="briefcase" tint={C.blue} soft={C.blueSoft} onPress={() => nav.navigate('students', { stage: 'on-placement' })} />
+        <KpiCard label="Active Clients" value={activeClients} icon="briefcase" tint={C.blue} soft={C.blueSoft} onPress={() => nav.navigate('students', { stages: ['on-placement'] })} />
         <KpiCard label={`2026 Target (${target})`} value={targetPct} suffix="%" icon="chart" tint={C.violet} soft={C.violetSoft} />
       </View>
       {isAdmin && (
@@ -607,12 +638,19 @@ function WebDashboard() {
             <StatusDonut segments={donutSegs} />
             <View style={{ flex: 1, minWidth: 200, gap: 12 } as any}>
               {donutSegs.map((seg) => (
-                <View key={seg.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+                <TouchableOpacity
+                  key={seg.label}
+                  activeOpacity={seg.stages ? 0.7 : 1}
+                  disabled={!seg.stages}
+                  onPress={() => seg.stages && nav.navigate('students', { stages: seg.stages })}
+                  {...({ dataSet: seg.stages ? { btn: '1' } : {} } as any)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}
+                >
                   <View style={{ width: 11, height: 11, borderRadius: 3, backgroundColor: seg.color }} />
                   <Text style={{ flex: 1, fontSize: 12.5, color: C.textMid, fontWeight: '500' }}>{seg.label}</Text>
                   <Text style={{ fontSize: 13, fontWeight: '700', color: C.text, minWidth: 28, textAlign: 'right' }}>{seg.value}</Text>
                   <Text style={{ fontSize: 11.5, color: C.textMute, fontWeight: '600', minWidth: 40, textAlign: 'right' }}>{Math.round((seg.value / (total || 1)) * 100)}%</Text>
-                </View>
+                </TouchableOpacity>
               ))}
             </View>
           </View>
@@ -629,12 +667,12 @@ function WebDashboard() {
           {progs.map(([prog, v]) => {
             const rate = v.size ? Math.round((v.placed / v.size) * 100) : 0;
             return (
-              <View key={prog} {...({ dataSet: { row: '1' } } as any)} style={[tbl.row, { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
+              <TouchableOpacity key={prog} activeOpacity={0.7} onPress={() => nav.navigate('students', { programme: prog })} {...({ dataSet: { row: '1' } } as any)} style={[tbl.row, { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
                 <Text style={[tbl.cell, { flex: 1.6, fontWeight: '600', color: C.text }]}>{prog}</Text>
                 <Text style={[tbl.cell, { textAlign: 'right' }]}>{v.size}</Text>
                 <Text style={[tbl.cell, { textAlign: 'right', color: C.blue, fontWeight: '600' }]}>{v.placed}</Text>
                 <Text style={[tbl.cell, { textAlign: 'right', fontWeight: '700', color: rate >= 80 ? C.green : C.amber }]}>{rate}%</Text>
-              </View>
+              </TouchableOpacity>
             );
           })}
           <View style={[tbl.row, { backgroundColor: C.headFill }]}>
@@ -669,7 +707,7 @@ function WebDashboard() {
           <CardTitle right={<View style={u.countTag}><Text style={u.countTagText}>{activeClients}</Text></View>}>Active Clients</CardTitle>
           {clients.length === 0 ? <Text style={{ fontSize: 13, color: C.textMute }}>No active secondments yet.</Text> :
             clients.map(([name, n]) => (
-              <TouchableOpacity key={name} activeOpacity={0.7} onPress={() => nav.navigate('students', { stage: 'on-placement' })} {...({ dataSet: { btn: '1' } } as any)} style={{ marginBottom: 12 }}>
+              <TouchableOpacity key={name} activeOpacity={0.7} onPress={() => nav.navigate('students', { company: name })} {...({ dataSet: { btn: '1' } } as any)} style={{ marginBottom: 12 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
                   <Text style={{ fontSize: 12.5, fontWeight: '500', color: C.textMid }} numberOfLines={1}>{name}</Text>
                   <Text style={{ fontSize: 12.5, fontWeight: '700', color: C.green }}>{n}</Text>
@@ -706,7 +744,7 @@ const CCP_CFG: Record<'yes' | 'completed' | 'no', { label: string; fg: string; b
   no: { label: 'No', fg: C.slate, bg: C.slateSoft },
 };
 
-function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStudentRecord) => void }) {
+function StudentRow({ s, onEdit, trainingEnd, onRefresh }: { s: StaffStudentRecord; onEdit: (s: StaffStudentRecord) => void; trainingEnd?: string; onRefresh?: () => void }) {
   const [open, setOpen] = useState(false);
   const grown = useGrow();
   const hasCV = Boolean(s.cvFilename || s.cvUrl);
@@ -721,6 +759,7 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
   let bondLeftLabel: string | null = null;
   let bondLeftColor: string = C.textMid;
   if (s.stage === 'bond-completed') { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
+  else if (s.stage === 'extended') { bondLeftLabel = 'Extended'; bondLeftColor = STAGE.extended.fg; }
   else if (s.stage !== 'withdrawn') {
     if (bondMode === 'end_date') {
       if (s.bondEndDate) {
@@ -740,7 +779,26 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
   const [ivDate, setIvDate] = useState('');
   const [ivOutcome, setIvOutcome] = useState<InterviewRecord['outcome']>('scheduled');
   const [ivNotes, setIvNotes] = useState('');
-  function loadInterviews() { mgmt.fetchInterviews(s.studentId).then(setInterviews).catch(() => setInterviews([])); setIvLoaded(true); }
+  const [pendingSubs, setPendingSubs] = useState<CertSubmission[]>([]);
+  function loadInterviews() {
+    mgmt.fetchInterviews(s.studentId).then(setInterviews).catch(() => setInterviews([]));
+    fetchCertSubmissions(s.studentId, true).then(setPendingSubs).catch(() => {});
+    setIvLoaded(true);
+  }
+  async function decideSub(sub: CertSubmission, ok: boolean) {
+    try {
+      if (ok) {
+        const certs: Certification[] = [...(s.certifications ?? []), {
+          id: sub.id, name: sub.name, provider: sub.provider ?? '', earnedAt: sub.earnedAt ?? new Date().toISOString().slice(0, 10),
+          track: 'cybersecurity' as CourseTrack, verified: true,
+        }];
+        await updateStudentRecord(s.studentId, { ...toStudentEdit(s), certifications: certs });
+      }
+      await reviewCertSubmission(sub.id, ok ? 'approved' : 'rejected');
+      setPendingSubs((prev) => prev.filter((x) => x.id !== sub.id));
+      if (ok) onRefresh?.();
+    } catch (e: any) { if (typeof window !== 'undefined') window.alert(e?.message ?? 'Failed'); }
+  }
   function addInterview() {
     if (!ivCompany.trim()) return;
     const rec: InterviewRecord = { id: mgmt.newId(), studentId: s.studentId, company: ivCompany.trim(), role: ivRole.trim() || undefined, date: ivDate || new Date().toISOString().slice(0, 10), outcome: ivOutcome, notes: ivNotes.trim() || undefined };
@@ -759,16 +817,26 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
           <Avatar name={s.name} stage={s.stage} size={34} />
           <View><Text style={tbl.name}>{s.name}</Text><Text style={tbl.meta}>{s.email}</Text></View>
         </View>
-        <Text style={tbl.cell}>{s.cohortName}</Text>
+        <View style={tbl.cell}>
+          <Text style={{ fontSize: 13, color: C.textMid }}>{s.cohortName}</Text>
+          {s.stage === 'on-course' && trainingEnd ? <Text style={tbl.meta}>ends {trainingEnd}</Text> : null}
+        </View>
         <View style={tbl.cell}><StagePill stage={s.stage} /></View>
         <View style={[tbl.cell, { flex: 1.6 }]}>
           {currentCompany ? (
             <View><Text style={tbl.name}>{currentRole ?? '—'}</Text><Text style={tbl.meta}>{currentCompany}</Text></View>
           ) : <Text style={tbl.meta}>—</Text>}
         </View>
-        <View style={[tbl.cell, { flex: 0.7, flexDirection: 'row', alignItems: 'center', gap: 6 }]}>
+        <View style={[tbl.cell, { flex: 1.2, flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }]}>
           {s.certifications.length > 0 ? (
-            <View style={tbl.certCount}><Icon name="award" size={12} color={C.violet} /><Text style={tbl.certCountText}>{s.certifications.length}</Text></View>
+            <>
+              {s.certifications.slice(0, 3).map((c) => (
+                <View key={c.id} style={[tbl.certBadge, c.verified === false && tbl.certBadgePending]}>
+                  <Text style={[tbl.certBadgeText, c.verified === false && { color: C.textMute }]} numberOfLines={1}>{c.name}</Text>
+                </View>
+              ))}
+              {s.certifications.length > 3 && <Text style={[tbl.meta, { fontWeight: '700' }]}>+{s.certifications.length - 3}</Text>}
+            </>
           ) : <Text style={tbl.meta}>—</Text>}
         </View>
         <View style={[tbl.cell, { flex: 1 }]}>
@@ -793,7 +861,7 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
             {placements.length === 0 ? (
               <Text style={tbl.meta}>No placements recorded.</Text>
             ) : placements.map((p) => {
-              const st = PSTATUS[p.status];
+              const st = PSTATUS[p.status];   // (perf reports listed after history below)
               return (
                 <View key={p.id} style={tbl.histRow}>
                   <View style={tbl.histTop}>
@@ -802,9 +870,24 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
                   </View>
                   <Text style={tbl.meta}>{p.role}</Text>
                   <Text style={tbl.histDates}>{p.startDate} → {p.endDate ?? 'Present'}{typeof p.months === 'number' ? `  ·  ${p.months}mo` : ''}{p.note ? `  ·  ${p.note}` : ''}</Text>
+                  {p.jdUrl ? (
+                    <TouchableOpacity onPress={() => openUrl(p.jdUrl)} {...({ dataSet: { btn: '1' } } as any)} style={{ marginTop: 3, alignSelf: 'flex-start' }}>
+                      <Text style={{ fontSize: 11.5, color: C.blue, fontWeight: '600' }}>JD: {p.jdFilename ?? 'view'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
               );
             })}
+            {(s.performanceReports ?? []).length > 0 && (
+              <>
+                <Text style={tbl.panelLabel2}>Performance Reports</Text>
+                {(s.performanceReports ?? []).map((r) => (
+                  <TouchableOpacity key={`${r.year}-${r.url}`} onPress={() => openUrl(r.url)} {...({ dataSet: { btn: '1' } } as any)} style={{ paddingVertical: 3 }}>
+                    <Text style={{ fontSize: 12, color: C.blue, fontWeight: '600' }}>{r.year} — {r.filename ?? 'report'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
           </View>
 
           <View style={{ flex: 1, minWidth: 220 } as any}>
@@ -826,6 +909,7 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
           <View style={{ flex: 1, minWidth: 220 } as any}>
             <Text style={tbl.panelLabel}>Profile</Text>
             <Detail label="Date of birth" value={s.dateOfBirth ?? '—'} />
+            {s.stage === 'on-course' ? <Detail label="Training ends" value={trainingEnd ?? '—'} /> : null}
             <Detail label="Reporting officer" value={active?.reportingOfficer ?? s.reportingOfficer ?? '—'} />
             <Detail label="RO email" value={active?.roEmail ?? s.roEmail ?? '—'} />
             <Detail label="Account manager" value={s.accountManager ?? '—'} />
@@ -837,8 +921,18 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
             {s.certifications.length === 0 ? <Text style={tbl.meta}>None yet.</Text> : (
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                 {s.certifications.map((c) => (
-                  <View key={c.id} style={{ backgroundColor: C.violetSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 }}>
-                    <Text style={{ fontSize: 11, color: C.violet, fontWeight: '600' }}>{c.name}</Text>
+                  <View key={c.id} style={[{ backgroundColor: C.violetSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 }, c.verified === false && { backgroundColor: 'transparent', borderWidth: 1, borderColor: C.border }]}>
+                    <Text style={[{ fontSize: 11, color: C.violet, fontWeight: '600' }, c.verified === false && { color: C.textMute }]}>{c.name}{c.verified === false ? ' (pending)' : ''}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+            <Text style={tbl.panelLabel2}>Upskilling Taken</Text>
+            {(s.upskilling ?? []).length === 0 ? <Text style={tbl.meta}>None recorded.</Text> : (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {(s.upskilling ?? []).map((uc) => (
+                  <View key={uc.id} style={{ backgroundColor: C.blueSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 }}>
+                    <Text style={{ fontSize: 11, color: C.blue, fontWeight: '600' }}>{uc.title}{uc.completedAt ? ` · ${uc.completedAt}` : ''}</Text>
                   </View>
                 ))}
               </View>
@@ -887,6 +981,24 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
               <TouchableOpacity onPress={addInterview} style={tbl.ivAddBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={13} color="#fff" /><Text style={tbl.ivAddText}>Add</Text></TouchableOpacity>
             </View>
           </View>
+
+          {pendingSubs.length > 0 && (
+            <View style={{ flexBasis: '100%', borderTopWidth: 1, borderTopColor: C.borderSoft, paddingTop: 14 }}>
+              <Text style={tbl.panelLabel}>Cert Approvals Pending</Text>
+              <View style={{ gap: 8 }}>
+                {pendingSubs.map((sub) => (
+                  <View key={sub.id} style={tbl.ivRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={tbl.histCompany}>{sub.name}</Text>
+                      <Text style={tbl.meta}>{[sub.provider, sub.earnedAt].filter(Boolean).join(' \u00b7 ') || 'self-reported by student'}</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => decideSub(sub, true)} style={[em.smallBtn, { borderColor: C.greenDot, backgroundColor: C.greenSoft }]} {...({ dataSet: { btn: '1' } } as any)}><Text style={[em.smallBtnText, { color: C.green }]}>Verify</Text></TouchableOpacity>
+                    <TouchableOpacity onPress={() => decideSub(sub, false)} style={[em.smallBtn, { borderColor: '#FECDCA', backgroundColor: '#FEF3F2' }]} {...({ dataSet: { btn: '1' } } as any)}><Text style={[em.smallBtnText, { color: '#B42318' }]}>Reject</Text></TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
         </View>
       )}
     </View>
@@ -902,14 +1014,39 @@ function Detail({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Months of bond left. 0 = done, null = unknown / not applicable. */
+function bondMonthsLeft(s: StaffStudentRecord): number | null {
+  if (s.stage === 'bond-completed' || s.stage === 'extended') return 0;
+  if (s.stage === 'withdrawn') return null;
+  if ((s.bondMode ?? 'accumulative') === 'end_date') {
+    if (!s.bondEndDate) return null;
+    const m = (new Date(s.bondEndDate).getTime() - Date.now()) / (86400000 * 30.44);
+    return Number.isNaN(m) ? null : Math.max(0, m);
+  }
+  return Math.max(0, (s.bondMonths ?? 24) - mgmt.bondServedMonths(s.placements));
+}
+
+const BOND_FILTERS = [
+  ['any', 'Any'], ['lt3', 'Ends \u2264 3 mo'], ['lt6', 'Ends \u2264 6 mo'],
+  ['lt12', 'Ends \u2264 12 mo'], ['gt12', '12+ mo left'], ['done', 'Done'],
+] as const;
+type BondFilter = typeof BOND_FILTERS[number][0];
+
 function WebStudents() {
   const { accessToken } = useAuth();
   const nav = useNav();
   const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
   const [search, setSearch] = useState('');
-  const [stageFilter, setStageFilter] = useState<StudentLifecycleStage | 'all'>(nav.studentFilter?.stage ?? 'all');
+  const [stageFilters, setStageFilters] = useState<Set<StudentLifecycleStage>>(new Set(nav.studentFilter?.stages ?? []));
   const [cohortFilters, setCohortFilters] = useState<Set<string>>(new Set(nav.studentFilter?.cohort ? [nav.studentFilter.cohort] : []));
   const [ccpFilter, setCcpFilter] = useState<'all' | 'yes' | 'completed' | 'no'>('all');
+  const [companyFilter, setCompanyFilter] = useState(nav.studentFilter?.company ?? '');
+  const [programmeFilter, setProgrammeFilter] = useState(nav.studentFilter?.programme ?? '');
+  const [bondFilter, setBondFilter] = useState<BondFilter>('any');
+  const [interviewedFor, setInterviewedFor] = useState('');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [allIv, setAllIv] = useState<InterviewRecord[]>([]);
+  const [allIvLoaded, setAllIvLoaded] = useState(false);
   const [editTarget, setEditTarget] = useState<StaffStudentRecord | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -929,24 +1066,91 @@ function WebStudents() {
   const [npRole, setNpRole] = useState('');
   const [npRO, setNpRO] = useState('');
   const [npROEmail, setNpROEmail] = useState('');
+  const [editUpskilling, setEditUpskilling] = useState<UpskillingTaken[]>([]);
+  const [editCerts, setEditCerts] = useState<Certification[]>([]);
+  const [editReports, setEditReports] = useState<PerformanceReport[]>([]);
+  const [newCertName, setNewCertName] = useState('');
+  const [newCertProvider, setNewCertProvider] = useState('');
+  const [repYear, setRepYear] = useState(String(new Date().getFullYear()));
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [courseObjs, setCourseObjs] = useState<Course[]>([]);
+  useEffect(() => { mgmt.getCourses().then(setCourseObjs).catch(() => {}); }, []);
 
   useEffect(() => { fetchStaffStudentRoster(accessToken).then(setStudents); }, []);
 
+  // Apply cross-tab navigation filters (e.g. clicking a dashboard segment).
+  useEffect(() => {
+    const f = nav.studentFilter;
+    if (!f) return;
+    setStageFilters(new Set(f.stages ?? []));
+    setCohortFilters(new Set(f.cohort ? [f.cohort] : []));
+    setCompanyFilter(f.company ?? '');
+    setProgrammeFilter(f.programme ?? '');
+  }, [nav.studentFilter]);
+
+  // Lazy-load every interview once the advanced filters are opened.
+  useEffect(() => {
+    if (!moreOpen || allIvLoaded) return;
+    setAllIvLoaded(true);
+    mgmt.fetchAllInterviews().then(setAllIv).catch(() => {});
+  }, [moreOpen, allIvLoaded]);
+  const ivByStudent = useMemo(() => {
+    const m: Record<string, InterviewRecord[]> = {};
+    allIv.forEach((r) => { (m[r.studentId] = m[r.studentId] ?? []).push(r); });
+    return m;
+  }, [allIv]);
+
   const cohortOptions = useMemo(() => (students ? Array.from(new Set(students.map((s) => s.cohortName))).sort() : []), [students]);
-  const [cohortList, setCohortList] = useState<string[]>([]);
-  useEffect(() => { mgmt.getCohorts().then((cs) => setCohortList(cs.map((cc) => cc.name))).catch(() => {}); }, []);
-  const cohortNames = useMemo(() => Array.from(new Set([...(students?.map((s) => s.cohortName) ?? []), ...cohortList])).sort(), [students, cohortList]);
+  const [cohortObjs, setCohortObjs] = useState<Cohort[]>([]);
+  useEffect(() => { mgmt.getCohorts().then(setCohortObjs).catch(() => {}); }, []);
+  const cohortNames = useMemo(() => Array.from(new Set([...(students?.map((s) => s.cohortName) ?? []), ...cohortObjs.map((cc) => cc.name)])).sort(), [students, cohortObjs]);
+  const cohortEnd = useMemo(() => {
+    const m: Record<string, string> = {};
+    cohortObjs.forEach((cc) => { if (cc.endDate && cc.endDate !== 'TBD') m[cc.name] = cc.endDate; });
+    return m;
+  }, [cohortObjs]);
   const filtered = useMemo(() => {
     if (!students) return [];
     const q = search.toLowerCase();
+    const co = companyFilter.trim().toLowerCase();
+    const iv = interviewedFor.trim().toLowerCase();
     return students.filter((s) => {
       const ms = !q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q) || (s.accountManager ?? '').toLowerCase().includes(q) || (s.personalEmail ?? '').toLowerCase().includes(q) || (s.contactNo ?? '').toLowerCase().includes(q);
-      const mst = stageFilter === 'all' || s.stage === stageFilter;
+      const mst = stageFilters.size === 0 || stageFilters.has(s.stage);
       const mc = cohortFilters.size === 0 || cohortFilters.has(s.cohortName);
       const mccp = ccpFilter === 'all' || (s.ccpGrant ?? 'no') === ccpFilter;
-      return ms && mst && mc && mccp;
+      const mprog = !programmeFilter || s.cohortName.toUpperCase().startsWith(programmeFilter.toUpperCase());
+      const comp = (mgmt.activePlacement(s.placements)?.company ?? s.placementCompany ?? '').toLowerCase();
+      const mcomp = !co || comp.includes(co);
+      let mbond = true;
+      if (bondFilter !== 'any') {
+        const left = bondMonthsLeft(s);
+        if (left == null) mbond = false;
+        else if (bondFilter === 'done') mbond = left <= 0;
+        else if (bondFilter === 'lt3') mbond = left > 0 && left <= 3;
+        else if (bondFilter === 'lt6') mbond = left > 0 && left <= 6;
+        else if (bondFilter === 'lt12') mbond = left > 0 && left <= 12;
+        else mbond = left > 12;
+      }
+      const miv = !iv || (ivByStudent[s.studentId] ?? []).some((r) => r.company.toLowerCase().includes(iv));
+      return ms && mst && mc && mccp && mprog && mcomp && mbond && miv;
     });
-  }, [students, search, stageFilter, cohortFilters, ccpFilter]);
+  }, [students, search, stageFilters, cohortFilters, ccpFilter, programmeFilter, companyFilter, bondFilter, interviewedFor, ivByStudent]);
+
+  const moreActiveN = (ccpFilter !== 'all' ? 1 : 0) + (bondFilter !== 'any' ? 1 : 0) + (companyFilter.trim() ? 1 : 0) + (interviewedFor.trim() ? 1 : 0) + (programmeFilter ? 1 : 0);
+  const activeChips: { label: string; clear: () => void }[] = [
+    ...Array.from(stageFilters).map((st) => ({ label: STAGE[st]?.label ?? st, clear: () => setStageFilters((prev) => { const n = new Set(prev); n.delete(st); return n; }) })),
+    ...Array.from(cohortFilters).map((cName) => ({ label: cName, clear: () => setCohortFilters((prev) => { const n = new Set(prev); n.delete(cName); return n; }) })),
+    ...(programmeFilter ? [{ label: `Programme: ${programmeFilter}`, clear: () => setProgrammeFilter('') }] : []),
+    ...(ccpFilter !== 'all' ? [{ label: `CCP: ${CCP_CFG[ccpFilter].label}`, clear: () => setCcpFilter('all') }] : []),
+    ...(bondFilter !== 'any' ? [{ label: `Bond: ${BOND_FILTERS.find(([k]) => k === bondFilter)?.[1]}`, clear: () => setBondFilter('any') }] : []),
+    ...(companyFilter.trim() ? [{ label: `Company: ${companyFilter.trim()}`, clear: () => setCompanyFilter('') }] : []),
+    ...(interviewedFor.trim() ? [{ label: `Interviewed: ${interviewedFor.trim()}`, clear: () => setInterviewedFor('') }] : []),
+  ];
+  function clearAllFilters() {
+    setStageFilters(new Set()); setCohortFilters(new Set()); setCcpFilter('all');
+    setBondFilter('any'); setCompanyFilter(''); setInterviewedFor(''); setProgrammeFilter('');
+  }
 
   const today = () => new Date().toISOString().slice(0, 10);
   function openEdit(s: StaffStudentRecord) {
@@ -958,6 +1162,44 @@ function WebStudents() {
       : (s.placementCompany ? [{ id: 'p-legacy', company: s.placementCompany, role: s.placementRole ?? '', reportingOfficer: s.reportingOfficer, roEmail: s.roEmail, startDate: s.placementStartDate ?? today(), status: (s.stage === 'on-placement' ? 'active' : s.stage === 'bond-completed' ? 'completed' : 'terminated') }] : []);
     setEditPlacements(existing);
     setNpCompany(''); setNpRole(''); setNpRO(''); setNpROEmail('');
+    setEditUpskilling(s.upskilling ?? []); setEditCerts(s.certifications ?? []); setEditReports(s.performanceReports ?? []);
+    setNewCertName(''); setNewCertProvider(''); setRepYear(String(new Date().getFullYear()));
+  }
+
+  async function attachJD(placementId: string) {
+    if (!editTarget) return;
+    const f = await pickFile(); if (!f) return;
+    setUploadBusy(true);
+    try {
+      const { url, filename } = await uploadFileToSharePoint({ kind: 'jd', ownerId: editTarget.studentId, filename: f.name, uri: f.uri, mimeType: f.mimeType });
+      setEditPlacements((prev) => prev.map((p) => (p.id === placementId ? { ...p, jdUrl: url, jdFilename: filename } : p)));
+    } catch (e: any) { if (typeof window !== 'undefined') window.alert(e?.message ?? 'Upload failed'); }
+    finally { setUploadBusy(false); }
+  }
+
+  async function addReport() {
+    if (!editTarget) return;
+    const year = Number(repYear);
+    if (!year) return;
+    const f = await pickFile(); if (!f) return;
+    setUploadBusy(true);
+    try {
+      const { url, filename } = await uploadFileToSharePoint({ kind: 'performance-report', ownerId: editTarget.studentId, filename: f.name, uri: f.uri, mimeType: f.mimeType });
+      setEditReports((prev) => [...prev.filter((r) => r.year !== year), { year, url, filename, uploadedAt: new Date().toISOString() }].sort((a, b) => b.year - a.year));
+    } catch (e: any) { if (typeof window !== 'undefined') window.alert(e?.message ?? 'Upload failed'); }
+    finally { setUploadBusy(false); }
+  }
+
+  function toggleUpskilling(co: Course) {
+    setEditUpskilling((prev) => prev.some((x) => x.id === co.id)
+      ? prev.filter((x) => x.id !== co.id)
+      : [...prev, { id: co.id, title: co.title, provider: co.provider, track: co.track, completedAt: new Date().toISOString().slice(0, 10) }]);
+  }
+
+  function addCert() {
+    if (!newCertName.trim()) return;
+    setEditCerts((prev) => [...prev, { id: mgmt.newId(), name: newCertName.trim(), provider: newCertProvider.trim() || '', earnedAt: new Date().toISOString().slice(0, 10), track: 'cybersecurity', verified: true }]);
+    setNewCertName(''); setNewCertProvider('');
   }
   function addPlacement() {
     if (!npCompany.trim()) return;
@@ -980,6 +1222,7 @@ function WebStudents() {
       stage: editStage, cohortName: editCohort, dateOfBirth: editDob || undefined, accountManager: editAcctMgr || undefined, contactNo: editContact || undefined, personalEmail: editPersonalEmail || undefined, dateJoined: editDateJoined || undefined, ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, bondMode: editBondMode, placements: editPlacements,
       placementCompany: act?.company, placementRole: act?.role,
       reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editBondEnd || undefined,
+      upskilling: editUpskilling, performanceReports: editReports, certifications: editCerts,
     };
     try {
       if (isSupabaseConfigured) {
@@ -990,6 +1233,7 @@ function WebStudents() {
           ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, bondMode: editBondMode, placements: editPlacements,
           placementCompany: act?.company, placementRole: act?.role,
           reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editBondEnd || undefined,
+          upskilling: editUpskilling, performanceReports: editReports, certifications: editCerts,
         });
       } else {
         mgmt.savePlacement(editTarget.studentId, override);
@@ -1001,7 +1245,7 @@ function WebStudents() {
     finally { setSaving(false); }
   }
 
-  const STAGES: Array<StudentLifecycleStage | 'all'> = ['all', 'on-course', 'job-hunting', 'on-placement', 'bond-completed', 'withdrawn'];
+  const STAGE_KEYS = Object.keys(STAGE) as StudentLifecycleStage[];
   if (!students) return <Loader />;
 
   return (
@@ -1010,17 +1254,20 @@ function WebStudents() {
         <SearchBox value={search} onChange={setSearch} placeholder="Search name or email…" />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
           <View style={{ flexDirection: 'row', gap: 6 }}>
-            {STAGES.map((s) => {
-              const on = stageFilter === s;
+            <TouchableOpacity onPress={() => setStageFilters(new Set())} style={[tbl.chip, stageFilters.size === 0 && tbl.chipOn]} {...({ dataSet: { btn: '1' } } as any)}>
+              <Text style={[tbl.chipText, stageFilters.size === 0 && tbl.chipTextOn]}>All stages</Text>
+            </TouchableOpacity>
+            {STAGE_KEYS.map((st) => {
+              const on = stageFilters.has(st);
               return (
-                <TouchableOpacity key={s} onPress={() => setStageFilter(s)} style={[tbl.chip, on && tbl.chipOn]} {...({ dataSet: { btn: '1' } } as any)}>
-                  <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{s === 'all' ? 'All stages' : STAGE[s as StudentLifecycleStage]?.label ?? s}</Text>
+                <TouchableOpacity key={st} onPress={() => setStageFilters((prev) => { const n = new Set(prev); n.has(st) ? n.delete(st) : n.add(st); return n; })} style={[tbl.chip, on && tbl.chipOn]} {...({ dataSet: { btn: '1' } } as any)}>
+                  <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{STAGE[st].label}</Text>
                 </TouchableOpacity>
               );
             })}
           </View>
         </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0, maxWidth: 360 }}>
           <View style={{ flexDirection: 'row', gap: 6 }}>
             {cohortOptions.map((c) => {
               const on = cohortFilters.has(c);
@@ -1032,21 +1279,66 @@ function WebStudents() {
             })}
           </View>
         </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0 }}>
-          <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-            <Text style={{ fontSize: 11, color: C.textMute, fontWeight: '700', marginRight: 2 }}>CCP</Text>
-            {(['all', 'yes', 'completed', 'no'] as const).map((v) => {
-              const on = ccpFilter === v;
-              return (
-                <TouchableOpacity key={v} onPress={() => setCcpFilter(v)} style={[tbl.chip, on && { backgroundColor: C.green, borderColor: C.green }]} {...({ dataSet: { btn: '1' } } as any)}>
-                  <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{v === 'all' ? 'All' : CCP_CFG[v].label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </ScrollView>
-        <Text style={tbl.count}>{filtered.length} student{filtered.length !== 1 ? 's' : ''}</Text>
+        <TouchableOpacity onPress={() => setMoreOpen((o) => !o)} style={[tbl.chip, (moreOpen || moreActiveN > 0) && { borderColor: C.text }, moreOpen && { backgroundColor: C.text }]} {...({ dataSet: { btn: '1' } } as any)}>
+          <Text style={[tbl.chipText, moreOpen && tbl.chipTextOn, !moreOpen && moreActiveN > 0 && { color: C.text, fontWeight: '700' }]}>
+            More filters{moreActiveN > 0 ? ` (${moreActiveN})` : ''}
+          </Text>
+        </TouchableOpacity>
+        <Text style={tbl.count}>{filtered.length} of {students.length} trainee{students.length !== 1 ? 's' : ''}</Text>
       </View>
+
+      {moreOpen && (
+        <View {...({ dataSet: { anim: 'panel' } } as any)} style={tbl.moreBar}>
+          <View style={tbl.moreGroup}>
+            <Text style={tbl.moreLabel}>CCP grant</Text>
+            <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+              {(['all', 'yes', 'completed', 'no'] as const).map((v) => {
+                const on = ccpFilter === v;
+                return (
+                  <TouchableOpacity key={v} onPress={() => setCcpFilter(v)} style={[tbl.chip, on && { backgroundColor: C.green, borderColor: C.green }]} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{v === 'all' ? 'All' : CCP_CFG[v].label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+          <View style={tbl.moreGroup}>
+            <Text style={tbl.moreLabel}>Bond</Text>
+            <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+              {BOND_FILTERS.map(([k, lab]) => {
+                const on = bondFilter === k;
+                return (
+                  <TouchableOpacity key={k} onPress={() => setBondFilter(k)} style={[tbl.chip, on && { backgroundColor: C.blue, borderColor: C.blue }]} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Text style={[tbl.chipText, on && tbl.chipTextOn]}>{lab}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+          <View style={tbl.moreGroup}>
+            <Text style={tbl.moreLabel}>Company</Text>
+            <TextInput style={[em.input as any, { minWidth: 170, paddingVertical: 7 }]} value={companyFilter} onChangeText={setCompanyFilter} placeholder="e.g. ST Engineering" placeholderTextColor="#C2C9D6" />
+          </View>
+          <View style={tbl.moreGroup}>
+            <Text style={tbl.moreLabel}>Interviewed for</Text>
+            <TextInput style={[em.input as any, { minWidth: 170, paddingVertical: 7 }]} value={interviewedFor} onChangeText={setInterviewedFor} placeholder="company name" placeholderTextColor="#C2C9D6" />
+          </View>
+        </View>
+      )}
+
+      {activeChips.length > 0 && (
+        <View style={tbl.activeBar}>
+          {activeChips.map((chip) => (
+            <TouchableOpacity key={chip.label} onPress={chip.clear} style={tbl.activeChip} {...({ dataSet: { btn: '1' } } as any)}>
+              <Text style={tbl.activeChipText}>{chip.label}</Text>
+              <Icon name="close" size={11} color={C.textMid} />
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity onPress={clearAllFilters} {...({ dataSet: { btn: '1' } } as any)}>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: C.brand }}>Clear all</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: LAYOUT.pad }} showsVerticalScrollIndicator={false}>
         <View style={u.pageFull}>
@@ -1057,11 +1349,11 @@ function WebStudents() {
               <Text style={tbl.th}>Cohort</Text>
               <Text style={tbl.th}>Stage</Text>
               <Text style={[tbl.th, { flex: 1.6 }]}>Placement</Text>
-              <Text style={[tbl.th, { flex: 0.7 }]}>Certs</Text>
+              <Text style={[tbl.th, { flex: 1.2 }]}>Certs</Text>
               <Text style={[tbl.th, { flex: 1 }]}>Bond Left</Text>
               <Text style={[tbl.th, { flex: 1.4, textAlign: 'right' }]}>Actions</Text>
             </View>
-            {filtered.map((s) => <StudentRow key={s.studentId} s={s} onEdit={openEdit} />)}
+            {filtered.map((s) => <StudentRow key={s.studentId} s={s} onEdit={openEdit} trainingEnd={cohortEnd[s.cohortName]} onRefresh={() => fetchStaffStudentRoster(accessToken).then(setStudents)} />)}
             {filtered.length === 0 && <View style={{ padding: 40, alignItems: 'center' }}><Text style={{ color: C.textMute, fontSize: 13 }}>No students match your filters.</Text></View>}
           </Card>
         </View>
@@ -1118,6 +1410,70 @@ function WebStudents() {
                 ))}
               </View>
 
+              <Text style={em.section}>Upskilling Taken</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                {courseObjs.length === 0 ? <Text style={em.muted}>No courses defined yet (Manage → Upskilling).</Text> : courseObjs.map((co) => {
+                  const on = editUpskilling.some((x) => x.id === co.id);
+                  return (
+                    <TouchableOpacity key={co.id} onPress={() => toggleUpskilling(co)} style={[em.stage, on && { backgroundColor: C.blueSoft, borderColor: C.blue }]} {...({ dataSet: { btn: '1' } } as any)}>
+                      <Text style={[em.stageText, on && { color: C.blue }]}>{co.title}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {editUpskilling.filter((x) => !courseObjs.some((co) => co.id === x.id)).map((x) => (
+                <TouchableOpacity key={x.id} onPress={() => setEditUpskilling((prev) => prev.filter((y) => y.id !== x.id))} style={[em.stage, { backgroundColor: C.blueSoft, borderColor: C.blue, marginBottom: 8, alignSelf: 'flex-start' }]} {...({ dataSet: { btn: '1' } } as any)}>
+                  <Text style={[em.stageText, { color: C.blue }]}>{x.title}  ×</Text>
+                </TouchableOpacity>
+              ))}
+              <View style={{ height: 14 }} />
+
+              <Text style={em.section}>Certifications</Text>
+              {editCerts.length === 0 ? <Text style={[em.muted, { marginBottom: 10 }]}>None yet.</Text> : (
+                <View style={{ gap: 6, marginBottom: 10 }}>
+                  {editCerts.map((c) => (
+                    <View key={c.id} style={em.pCard}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={em.pCompany}>{c.name}{c.verified === false ? '  (pending)' : ''}</Text>
+                        <Text style={em.muted}>{[c.provider, c.earnedAt].filter(Boolean).join(' · ') || '—'}</Text>
+                      </View>
+                      {c.verified === false && (
+                        <TouchableOpacity onPress={() => setEditCerts((prev) => prev.map((x) => (x.id === c.id ? { ...x, verified: true } : x)))} style={[em.smallBtn, { borderColor: C.greenDot, backgroundColor: C.greenSoft }]} {...({ dataSet: { btn: '1' } } as any)}>
+                          <Text style={[em.smallBtnText, { color: C.green }]}>Verify</Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity onPress={() => setEditCerts((prev) => prev.filter((x) => x.id !== c.id))} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={13} color="#B42318" /></TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 22, flexWrap: 'wrap', alignItems: 'center' }}>
+                <TextInput style={[em.input as any, { flex: 1, minWidth: 140 }]} value={newCertName} onChangeText={setNewCertName} placeholder="Cert name (e.g. OSCP)" placeholderTextColor="#C2C9D6" />
+                <TextInput style={[em.input as any, { flex: 1, minWidth: 120 }]} value={newCertProvider} onChangeText={setNewCertProvider} placeholder="Provider" placeholderTextColor="#C2C9D6" />
+                <TouchableOpacity onPress={addCert} style={em.smallBtn} {...({ dataSet: { btn: '1' } } as any)}><Text style={em.smallBtnText}>Add</Text></TouchableOpacity>
+              </View>
+
+              <Text style={em.section}>Performance Reports (year-on-year)</Text>
+              {editReports.length === 0 ? <Text style={[em.muted, { marginBottom: 10 }]}>None uploaded.</Text> : (
+                <View style={{ gap: 6, marginBottom: 10 }}>
+                  {editReports.map((r) => (
+                    <View key={r.year} style={em.pCard}>
+                      <TouchableOpacity style={{ flex: 1 }} onPress={() => openUrl(r.url)} {...({ dataSet: { btn: '1' } } as any)}>
+                        <Text style={em.pCompany}>{r.year}</Text>
+                        <Text style={[em.muted, { color: C.blue }]}>{r.filename ?? 'view report'}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setEditReports((prev) => prev.filter((x) => x.year !== r.year))} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={13} color="#B42318" /></TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 22, alignItems: 'center' }}>
+                <TextInput style={[em.input as any, { maxWidth: 90 }]} value={repYear} onChangeText={setRepYear} keyboardType="numeric" placeholder="Year" placeholderTextColor="#C2C9D6" />
+                <TouchableOpacity onPress={addReport} disabled={uploadBusy} style={em.smallBtn} {...({ dataSet: { btn: '1' } } as any)}>
+                  <Text style={em.smallBtnText}>{uploadBusy ? 'Uploading…' : 'Upload report'}</Text>
+                </TouchableOpacity>
+              </View>
+
               <Text style={em.section}>Bond</Text>
               <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
                 {([['accumulative', 'Accumulative (pauses on bench)'], ['end_date', 'Fixed end date']] as const).map(([m, lab]) => (
@@ -1152,6 +1508,16 @@ function WebStudents() {
                             <View style={[tbl.pStatus, { backgroundColor: st.bg }]}><Text style={[tbl.pStatusText, { color: st.fg }]}>{st.label}</Text></View>
                           </View>
                           <Text style={em.muted}>{p.role || '—'} · {p.startDate} → {p.endDate ?? 'Present'}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                            {p.jdUrl ? (
+                              <TouchableOpacity onPress={() => openUrl(p.jdUrl)} {...({ dataSet: { btn: '1' } } as any)}>
+                                <Text style={{ fontSize: 11.5, color: C.blue, fontWeight: '600' }}>JD: {p.jdFilename ?? 'view'}</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                            <TouchableOpacity onPress={() => attachJD(p.id)} disabled={uploadBusy} {...({ dataSet: { btn: '1' } } as any)}>
+                              <Text style={{ fontSize: 11.5, color: C.brand, fontWeight: '600' }}>{uploadBusy ? 'Uploading…' : p.jdUrl ? 'Replace JD' : 'Attach JD'}</Text>
+                            </TouchableOpacity>
+                          </View>
                         </View>
                         {isActive && (
                           <View style={{ flexDirection: 'row', gap: 6 }}>
@@ -1232,6 +1598,15 @@ const tbl = StyleSheet.create({
   certName: { fontSize: 13, fontWeight: '600', color: C.text },
   cvBtn: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 7, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8, marginTop: 14 },
   cvBtnText: { fontSize: 12, fontWeight: '600', color: C.textMid },
+  moreBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 22, paddingHorizontal: LAYOUT.pad, paddingVertical: 12, backgroundColor: '#FBFCFE', borderBottomWidth: 1, borderBottomColor: C.border, alignItems: 'flex-end' },
+  moreGroup: { gap: 6 },
+  moreLabel: { fontSize: 11, fontWeight: '700', color: C.textMute, textTransform: 'uppercase', letterSpacing: 0.4 },
+  activeBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', paddingHorizontal: LAYOUT.pad, paddingVertical: 8, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border },
+  activeChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.slateSoft, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 14 },
+  activeChipText: { fontSize: 12, fontWeight: '600', color: C.textMid },
+  certBadge: { backgroundColor: C.violetSoft, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10, maxWidth: 92 },
+  certBadgePending: { backgroundColor: 'transparent', borderWidth: 1, borderColor: C.border },
+  certBadgeText: { fontSize: 10, fontWeight: '700', color: C.violet },
 });
 
 const em = StyleSheet.create({
@@ -1344,7 +1719,7 @@ function WebGrowth() {
       <View style={u.kpiRow}>
         <KpiCard label="Total Enrolled" value={overall.enrolled} icon="users" tint={C.blue} soft={C.blueSoft} onPress={() => nav.navigate('students')} />
         <KpiCard label="Ever Placed" value={overall.placed} icon="briefcase" tint={C.green} soft={C.greenSoft} onPress={() => nav.navigate('students')} />
-        <KpiCard label="Currently Seconded" value={overall.seconded} icon="cap" tint={C.violet} soft={C.violetSoft} onPress={() => nav.navigate('students', { stage: 'on-placement' })} />
+        <KpiCard label="Currently Seconded" value={overall.seconded} icon="cap" tint={C.violet} soft={C.violetSoft} onPress={() => nav.navigate('students', { stages: ['on-placement'] })} />
         <KpiCard label="Placement Rate" value={rate} suffix="%" icon="trending" tint={C.brand} soft={C.brandSoft} onPress={() => nav.navigate('dashboard')} />
       </View>
 
@@ -1872,7 +2247,6 @@ function WebUsers() {
     const ok = typeof window === 'undefined' ? true : window.confirm(`Make ${m.name || m.email} a student? They'll lose staff access.`);
     if (ok) mgmt.removeMember(m.id).then(() => setTick((t) => t + 1));
   }
-  function accept(m: StaffMember) { mgmt.upsertMember({ ...m, status: 'active' }).then(() => setTick((t) => t + 1)); }
   function remove(id: string) { mgmt.removeMember(id).then(() => setTick((t) => t + 1)); }
   const adminsN = members.filter((m) => m.status === 'active' && m.role === 'admin').length;
   const staffN = members.filter((m) => m.status === 'active' && m.role === 'staff').length;
@@ -1916,7 +2290,7 @@ function WebUsers() {
                 </View>
               </View>
               <View style={[tbl.cell, { flex: 1.3, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }]}>
-                {m.status === 'invited' && <TouchableOpacity onPress={() => accept(m)} style={tbl.iconBtn} {...({ dataSet: { btn: '1' } } as any)}><Text style={tbl.iconBtnText}>Mark joined</Text></TouchableOpacity>}
+                {m.status === 'invited' && <Text style={tbl.meta}>auto-joins on first sign-in</Text>}
                 <TouchableOpacity onPress={() => remove(m.id)} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={14} color="#B42318" /></TouchableOpacity>
               </View>
             </View>
@@ -1980,6 +2354,17 @@ function WebIntake() {
   }
   function setStatus(r: IntakeProgramme, status: IntakeStatus) { mgmt.saveIntake({ ...r, status }).then(() => setTick((t) => t + 1)); }
   function remove(id: string) { mgmt.deleteIntake(id).then(() => setTick((t) => t + 1)); }
+  const [sylBusy, setSylBusy] = useState<string | null>(null);
+  async function attachSyllabus(r: IntakeProgramme) {
+    const f = await pickFile(); if (!f) return;
+    setSylBusy(r.id);
+    try {
+      const { url, filename } = await uploadFileToSharePoint({ kind: 'syllabus', ownerId: r.id, filename: f.name, uri: f.uri, mimeType: f.mimeType });
+      await mgmt.saveIntake({ ...r, syllabusUrl: url, syllabusFilename: filename });
+      setTick((t) => t + 1);
+    } catch (e: any) { if (typeof window !== 'undefined') window.alert(e?.message ?? 'Upload failed'); }
+    finally { setSylBusy(null); }
+  }
 
   const started = rows.filter((r) => r.status === 'started').reduce((n, r) => n + r.quantity, 0);
   const confirmed = rows.filter((r) => r.status === 'confirmed').reduce((n, r) => n + r.quantity, 0);
@@ -2012,6 +2397,7 @@ function WebIntake() {
             <Text style={tbl.th}>Domain</Text>
             <Text style={[tbl.th, { flex: 0.7 }]}>Qty</Text>
             <Text style={[tbl.th, { flex: 1.7 }]}>Status</Text>
+            <Text style={[tbl.th, { flex: 1.1 }]}>Syllabus</Text>
             <Text style={[tbl.th, { flex: 0.6, textAlign: 'right' }]}> </Text>
           </View>
           {rows.length === 0 ? (
@@ -2031,6 +2417,17 @@ function WebIntake() {
                     <Text style={[tbl.ivPillText, r.status === s2 && { color: INTAKE_STATUS[s2].fg }]}>{INTAKE_STATUS[s2].label}</Text>
                   </TouchableOpacity>
                 ))}
+              </View>
+              <View style={[tbl.cell, { flex: 1.1, flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }]}>
+                {r.syllabusUrl ? (
+                  <TouchableOpacity style={tbl.iconBtn} onPress={() => openUrl(r.syllabusUrl)} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Icon name="download" size={12} color={C.textMid} /><Text style={tbl.iconBtnText}>Download</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity style={tbl.iconBtn} onPress={() => attachSyllabus(r)} disabled={sylBusy === r.id} {...({ dataSet: { btn: '1' } } as any)}>
+                  <Icon name="file" size={12} color={C.textMid} />
+                  <Text style={tbl.iconBtnText}>{sylBusy === r.id ? 'Uploading…' : r.syllabusUrl ? 'Replace' : 'Attach'}</Text>
+                </TouchableOpacity>
               </View>
               <View style={[tbl.cell, { flex: 0.6, alignItems: 'flex-end' }]}><TouchableOpacity onPress={() => remove(r.id)} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={14} color="#B42318" /></TouchableOpacity></View>
             </View>
