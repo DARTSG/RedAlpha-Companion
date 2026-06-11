@@ -474,9 +474,58 @@ function Page({ children }: { children: React.ReactNode }) {
 // Dashboard
 // ---------------------------------------------------------------------------
 
+// Map the raw RA "model" status (or fall back to stage) to a dashboard category.
+function trainCategory(s: StaffStudentRecord): 'seconded' | 'buyout' | 'bench' | 'training' | 'graduated' | 'terminated' {
+  const m = (s.model ?? '').toLowerCase();
+  if (m) {
+    if (m.includes('secondment')) return 'seconded';
+    if (m.includes('buy out') || m.includes('buyout')) return 'buyout';
+    if (m.includes('bench')) return 'bench';
+    if (m.includes('training')) return 'training';
+    if (m.includes('contract ended')) return 'graduated';
+    if (m.includes('terminat') || m.includes('withdraw')) return 'terminated';
+  }
+  switch (s.stage) {
+    case 'on-placement': return 'seconded';
+    case 'job-hunting': return 'bench';
+    case 'on-course': return 'training';
+    case 'bond-completed': return 'graduated';
+    case 'withdrawn': return 'terminated';
+    default: return 'training';
+  }
+}
+
+function StatusDonut({ segments, size = 190, stroke = 28 }: { segments: { label: string; value: number; color: string }[]; size?: number; stroke?: number }) {
+  const total = segments.reduce((n, s) => n + s.value, 0) || 1;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const cx = size / 2;
+  const gap = 1.5;
+  let acc = 0;
+  const arcs = segments.filter((s) => s.value > 0).map((s) => {
+    const len = (s.value / total) * circ;
+    const vis = Math.max(0.5, len - gap);
+    const arc = `<circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${stroke}" stroke-linecap="butt" stroke-dasharray="${vis.toFixed(2)} ${(circ - vis).toFixed(2)}" stroke-dashoffset="${(-acc).toFixed(2)}" transform="rotate(-90 ${cx} ${cx})"/>`;
+    acc += len;
+    return arc;
+  }).join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="#EEF1F4" stroke-width="${stroke}"/>${arcs}</svg>`;
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Image source={{ uri: `data:image/svg+xml,${encodeURIComponent(svg)}` }} style={{ width: size, height: size, position: 'absolute' }} />
+      <Text style={{ fontSize: 32, fontWeight: '700', color: C.text, letterSpacing: -0.6 }}>{total}</Text>
+      <Text style={{ fontSize: 11.5, color: C.textMute, marginTop: 2, fontWeight: '500' }}>trainees</Text>
+    </View>
+  );
+}
+
 function WebDashboard() {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const nav = useNav();
+  const grown = useGrow();
   const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+  const [target, setTarget] = useState(300);
   useEffect(() => {
     fetchStaffStudentRoster(accessToken).then((roster) => {
       if (isSupabaseConfigured) { setStudents(roster); return; }
@@ -484,132 +533,148 @@ function WebDashboard() {
       setStudents(roster.map((s) => (ov[s.studentId] ? { ...s, ...ov[s.studentId] } : s)));
     });
   }, []);
-  const nav = useNav();
-  const grown = useGrow();
+  useEffect(() => { mgmt.getSetting('placement_target', '300').then((v) => setTarget(Number(v) || 300)).catch(() => {}); }, []);
+  function editTarget() {
+    if (typeof window === 'undefined') return;
+    const v = window.prompt('Annual placement target:', String(target));
+    if (v && !Number.isNaN(Number(v))) { const n = Number(v); mgmt.setSetting('placement_target', String(n)); setTarget(n); }
+  }
 
   const list = students ?? [];
+  const cnt = { seconded: 0, buyout: 0, bench: 0, training: 0, graduated: 0, terminated: 0 } as Record<string, number>;
+  list.forEach((s) => { cnt[trainCategory(s)]++; });
   const total = list.length;
-  const placed = list.filter((s) => s.stage === 'on-placement' || s.stage === 'bond-completed').length;
-  const hunting = list.filter((s) => s.stage === 'job-hunting').length;
-  const totalCerts = list.reduce((n, s) => n + s.certifications.length, 0);
-  const rate = total ? Math.round((placed / total) * 100) : 0;
-  const rateAnim = useCountUp(rate);
+  const activeTrainees = cnt.seconded + cnt.bench + cnt.training;
+  const placementRate = activeTrainees ? Math.round((cnt.seconded / activeTrainees) * 100) : 0;
 
   if (!students) return <Loader />;
 
-  const cohortMap: Record<string, number> = {};
-  students.forEach((s) => { cohortMap[s.cohortName] = (cohortMap[s.cohortName] ?? 0) + 1; });
-  const cohorts = Object.entries(cohortMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  const maxC = Math.max(...cohorts.map(([, n]) => n), 1);
-  const BAR = CHART_SERIES;
+  const everPlaced = (s: StaffStudentRecord) => (s.placements && s.placements.length > 0) || Boolean(s.placementCompany);
+  const curCompany = (s: StaffStudentRecord) => mgmt.activePlacement(s.placements)?.company ?? s.placementCompany ?? '';
+  const placements2026 = list.reduce((n, s) => n + (s.placements?.filter((p) => (p.startDate || '').startsWith('2026')).length ?? 0), 0);
+  const clientCounts: Record<string, number> = {};
+  list.forEach((s) => { if (trainCategory(s) === 'seconded') { const co = curCompany(s); if (co) clientCounts[co] = (clientCounts[co] ?? 0) + 1; } });
+  const clients = Object.entries(clientCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const maxClient = Math.max(...clients.map(([, n]) => n), 1);
+  const activeClients = Object.keys(clientCounts).length;
+  const targetPct = target ? Math.round((placements2026 / target) * 100) : 0;
+  const inactiveAllTime = cnt.buyout + cnt.graduated + cnt.terminated;
+  const placedWithDart = list.filter((s) => curCompany(s).toLowerCase().includes('dart')).length;
 
-  // Needs attention: job hunting + bonds ending within 180 days
-  const now = Date.now();
-  const attention = students
-    .map((s) => {
-      if (s.stage === 'job-hunting') return { s, reason: 'On bench', tone: C.amber, bg: C.amberSoft };
-      if (s.bondEndDate && s.stage === 'on-placement') {
-        const days = Math.round((new Date(s.bondEndDate).getTime() - now) / 86400000);
-        if (days >= 0 && days <= 180) return { s, reason: `Bond ends in ${days}d`, tone: C.blue, bg: C.blueSoft };
-      }
-      return null;
-    })
-    .filter(Boolean) as { s: StaffStudentRecord; reason: string; tone: string; bg: string }[];
+  const progMap: Record<string, { size: number; placed: number }> = {};
+  list.forEach((s) => {
+    const mm = (s.cohortName || '').match(/^[A-Za-z]+/);
+    const prog = (mm ? mm[0] : 'Other').toUpperCase();
+    if (!progMap[prog]) progMap[prog] = { size: 0, placed: 0 };
+    progMap[prog].size++;
+    if (everPlaced(s)) progMap[prog].placed++;
+  });
+  const progs = Object.entries(progMap).sort((a, b) => b[1].size - a[1].size);
+  const pt = progs.reduce((a, [, v]) => ({ size: a.size + v.size, placed: a.placed + v.placed }), { size: 0, placed: 0 });
 
-  const companyCounts: Record<string, number> = {};
-  students.forEach((s) => { if (s.placementCompany && (s.stage === 'on-placement' || s.stage === 'bond-completed')) companyCounts[s.placementCompany] = (companyCounts[s.placementCompany] ?? 0) + 1; });
-  const companies = Object.entries(companyCounts).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  const maxCompany = Math.max(...companies.map(([, n]) => n), 1);
-
-  const recentCerts = students
-    .flatMap((s) => s.certifications.map((c) => ({ s, c })))
-    .sort((a, b) => new Date(b.c.earnedAt).getTime() - new Date(a.c.earnedAt).getTime())
-    .slice(0, 5);
+  const donutSegs = [
+    { label: 'Currently Seconded', value: cnt.seconded, color: CHART.indigo },
+    { label: 'Bond Buy-Out', value: cnt.buyout, color: CHART.sky },
+    { label: 'Not Yet Placed (Bench + Training)', value: cnt.bench + cnt.training, color: CHART.amber },
+    { label: 'Graduated / Released', value: cnt.graduated, color: CHART.emerald },
+    { label: 'Terminated', value: cnt.terminated, color: CHART.rose },
+  ];
 
   return (
     <Page>
       <View style={u.kpiRow}>
-        <KpiCard label="Total Students" value={total} icon="users" tint={C.slate} soft={C.slateSoft} onPress={() => nav.navigate('students')} />
-        <KpiCard label="Placement Rate" value={rate} suffix="%" icon="trending" tint={C.green} soft={C.greenSoft} onPress={() => nav.navigate('growth')} />
-        <KpiCard label="On Bench" value={hunting} icon="search" tint={C.amber} soft={C.amberSoft} onPress={() => nav.navigate('students', { stage: 'job-hunting' })} />
-        <KpiCard label="Certifications" value={totalCerts} icon="award" tint={C.violet} soft={C.violetSoft} onPress={() => nav.navigate('students')} />
+        <KpiCard label="Active Secondment" value={cnt.seconded} icon="briefcase" tint={CHART.indigo} soft={C.blueSoft} onPress={() => nav.navigate('students', { stage: 'on-placement' })} />
+        <KpiCard label="On The Bench" value={cnt.bench} icon="search" tint={C.amber} soft={C.amberSoft} onPress={() => nav.navigate('students', { stage: 'job-hunting' })} />
+        <KpiCard label="In Training" value={cnt.training} icon="book" tint={CHART.violet} soft={C.violetSoft} onPress={() => nav.navigate('students', { stage: 'on-course' })} />
+        <KpiCard label="Total Trainees" value={total} icon="users" tint={C.slate} soft={C.slateSoft} onPress={() => nav.navigate('students')} />
       </View>
+      <View style={u.kpiRow}>
+        <KpiCard label="Placement Rate" value={placementRate} suffix="%" icon="trending" tint={C.green} soft={C.greenSoft} />
+        <KpiCard label="2026 Placements" value={placements2026} icon="cap" tint={CHART.emerald} soft={C.greenSoft} />
+        <KpiCard label="Active Clients" value={activeClients} icon="briefcase" tint={C.blue} soft={C.blueSoft} onPress={() => nav.navigate('students', { stage: 'on-placement' })} />
+        <KpiCard label={`2026 Target (${target})`} value={targetPct} suffix="%" icon="chart" tint={C.violet} soft={C.violetSoft} />
+      </View>
+      {isAdmin && (
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: -6, marginBottom: 10 }}>
+          <TouchableOpacity onPress={editTarget} style={tbl.iconBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="edit" size={13} color={C.textMid} /><Text style={tbl.iconBtnText}>Edit target</Text></TouchableOpacity>
+        </View>
+      )}
 
       <View style={u.colsWrap}>
-        <Card style={{ flex: 1, minWidth: 240 }} anim>
-          <CardTitle>Placement Rate</CardTitle>
-          <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-            <Donut pct={rateAnim} />
-            <Text style={{ fontSize: 12.5, color: C.textMute, marginTop: 14 }}>{placed} of {total} students placed</Text>
+        <Card style={{ flex: 1.1, minWidth: 340 }} anim>
+          <CardTitle>Trainee Status Distribution</CardTitle>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18, flexWrap: 'wrap', paddingVertical: 8 }}>
+            <StatusDonut segments={donutSegs} />
+            <View style={{ flex: 1, minWidth: 200, gap: 12 } as any}>
+              {donutSegs.map((seg) => (
+                <View key={seg.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+                  <View style={{ width: 11, height: 11, borderRadius: 3, backgroundColor: seg.color }} />
+                  <Text style={{ flex: 1, fontSize: 12.5, color: C.textMid, fontWeight: '500' }}>{seg.label}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: C.text }}>{seg.value}</Text>
+                </View>
+              ))}
+            </View>
           </View>
         </Card>
 
-        <Card style={{ flex: 1.5, minWidth: 300 }} anim>
-          <CardTitle>Students by Cohort</CardTitle>
-          {cohorts.map(([name, n], i) => {
-            const col = BAR[i % BAR.length];
+        <Card style={{ flex: 1.5, minWidth: 360, padding: 0, overflow: 'hidden' }} anim>
+          <View style={{ padding: 20, paddingBottom: 0 }}><CardTitle>Programme Breakdown</CardTitle></View>
+          <View style={tbl.thead}>
+            <Text style={[tbl.th, { flex: 1.6 }]}>Programme</Text>
+            <Text style={[tbl.th, { textAlign: 'right' }]}>Cohort Size</Text>
+            <Text style={[tbl.th, { textAlign: 'right' }]}>Placed</Text>
+            <Text style={[tbl.th, { textAlign: 'right' }]}>Rate</Text>
+          </View>
+          {progs.map(([prog, v]) => {
+            const rate = v.size ? Math.round((v.placed / v.size) * 100) : 0;
             return (
-              <TouchableOpacity key={name} activeOpacity={0.7} onPress={() => nav.navigate('students', { cohort: name })} {...({ dataSet: { btn: '1' } } as any)} style={{ marginBottom: 12 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '500', color: C.textMid }}>{name}</Text>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: C.text }}>{n}</Text>
-                </View>
-                <View style={u.track}>
-                  <View {...({ dataSet: { bar: '1' } } as any)} style={{ width: grown ? `${(n / maxC) * 100}%` as any : '0%', height: '100%', backgroundColor: col, borderRadius: 4 }} />
-                </View>
-              </TouchableOpacity>
+              <View key={prog} {...({ dataSet: { row: '1' } } as any)} style={[tbl.row, { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
+                <Text style={[tbl.cell, { flex: 1.6, fontWeight: '600', color: C.text }]}>{prog}</Text>
+                <Text style={[tbl.cell, { textAlign: 'right' }]}>{v.size}</Text>
+                <Text style={[tbl.cell, { textAlign: 'right', color: C.blue, fontWeight: '600' }]}>{v.placed}</Text>
+                <Text style={[tbl.cell, { textAlign: 'right', fontWeight: '700', color: rate >= 80 ? C.green : C.amber }]}>{rate}%</Text>
+              </View>
             );
           })}
-        </Card>
-
-        <Card style={{ flex: 1.5, minWidth: 300 }} anim>
-          <CardTitle right={<View style={u.countTag}><Text style={u.countTagText}>{attention.length}</Text></View>}>Needs Attention</CardTitle>
-          {attention.length === 0 ? (
-            <View style={{ alignItems: 'center', paddingVertical: 28 }}>
-              <Icon name="trophy" size={26} color={C.greenDot} />
-              <Text style={{ fontSize: 13, color: C.textMute, marginTop: 10 }}>Everyone's on track.</Text>
-            </View>
-          ) : attention.map(({ s, reason, tone, bg }, i) => (
-            <TouchableOpacity key={s.studentId} activeOpacity={0.7} onPress={() => nav.navigate('students', { stage: s.stage })} {...({ dataSet: { btn: '1' } } as any)} style={[{ flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 10 }, i < attention.length - 1 && { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
-              <Avatar name={s.name} stage={s.stage} size={32} />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: '600', color: C.text }}>{s.name}</Text>
-                <Text style={{ fontSize: 11.5, color: C.textMute }}>{s.cohortName}</Text>
-              </View>
-              <View style={{ backgroundColor: bg, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 14 }}>
-                <Text style={{ fontSize: 11, fontWeight: '700', color: tone }}>{reason}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
+          <View style={[tbl.row, { backgroundColor: C.headFill }]}>
+            <Text style={[tbl.cell, { flex: 1.6, fontWeight: '700', color: C.text }]}>Total</Text>
+            <Text style={[tbl.cell, { textAlign: 'right', fontWeight: '700', color: C.text }]}>{pt.size}</Text>
+            <Text style={[tbl.cell, { textAlign: 'right', fontWeight: '700', color: C.text }]}>{pt.placed}</Text>
+            <Text style={[tbl.cell, { textAlign: 'right', fontWeight: '700', color: C.text }]}>{pt.size ? Math.round((pt.placed / pt.size) * 100) : 0}%</Text>
+          </View>
         </Card>
       </View>
 
       <View style={[u.colsWrap, { marginTop: 16 }]}>
-        <Card style={{ flex: 1, minWidth: 280 }} anim>
-          <CardTitle right={<Icon name="briefcase" size={15} color={C.textMute} />}>Placements by Company</CardTitle>
-          {companies.length === 0 ? <Text style={{ fontSize: 13, color: C.textMute }}>No placements yet.</Text> :
-            companies.map(([name, n]) => (
+        <Card style={{ flex: 1, minWidth: 300 }} anim>
+          <CardTitle>Bench &amp; Pipeline Overview</CardTitle>
+          {[
+            { label: 'On Bench (Available)', value: cnt.bench, detail: 'Awaiting placement', color: C.amber },
+            { label: 'In Training', value: cnt.training, detail: 'Current cohorts in training', color: CHART.violet },
+            { label: 'Placed with DART', value: placedWithDart, detail: 'Internal deployments', color: C.blue },
+            { label: 'Inactive (All Time)', value: inactiveAllTime, detail: 'Buy-out + Graduated + Terminated', color: C.textMute },
+          ].map((m, i) => (
+            <View key={m.label} style={[{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11 }, i < 3 && { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
+              <Text style={{ fontSize: 22, fontWeight: '800', color: m.color, minWidth: 44 }}>{m.value}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: C.text }}>{m.label}</Text>
+                <Text style={{ fontSize: 11.5, color: C.textMute }}>{m.detail}</Text>
+              </View>
+            </View>
+          ))}
+        </Card>
+
+        <Card style={{ flex: 1.2, minWidth: 320 }} anim>
+          <CardTitle right={<View style={u.countTag}><Text style={u.countTagText}>{activeClients}</Text></View>}>Active Clients</CardTitle>
+          {clients.length === 0 ? <Text style={{ fontSize: 13, color: C.textMute }}>No active secondments yet.</Text> :
+            clients.map(([name, n]) => (
               <TouchableOpacity key={name} activeOpacity={0.7} onPress={() => nav.navigate('students', { stage: 'on-placement' })} {...({ dataSet: { btn: '1' } } as any)} style={{ marginBottom: 12 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
                   <Text style={{ fontSize: 12.5, fontWeight: '500', color: C.textMid }} numberOfLines={1}>{name}</Text>
                   <Text style={{ fontSize: 12.5, fontWeight: '700', color: C.green }}>{n}</Text>
                 </View>
-                <View style={u.track}><View {...({ dataSet: { bar: '1' } } as any)} style={{ width: grown ? `${(n / maxCompany) * 100}%` as any : '0%', height: '100%', backgroundColor: CHART.emerald, borderRadius: 4 }} /></View>
+                <View style={u.track}><View {...({ dataSet: { bar: '1' } } as any)} style={{ width: grown ? `${(n / maxClient) * 100}%` as any : '0%', height: '100%', backgroundColor: CHART.emerald, borderRadius: 4 }} /></View>
               </TouchableOpacity>
-            ))}
-        </Card>
-
-        <Card style={{ flex: 1, minWidth: 280 }} anim>
-          <CardTitle>Recent Certifications</CardTitle>
-          {recentCerts.length === 0 ? <Text style={{ fontSize: 13, color: C.textMute }}>No certifications yet.</Text> :
-            recentCerts.map(({ s, c }, i) => (
-              <View key={s.studentId + c.id} style={[{ flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 9 }, i < recentCerts.length - 1 && { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
-                <View style={tbl.certIcon}><Icon name="award" size={14} color={C.violet} /></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12.5, fontWeight: '600', color: C.text }} numberOfLines={1}>{c.name}</Text>
-                  <Text style={{ fontSize: 11.5, color: C.textMute }}>{s.name} · {c.earnedAt}</Text>
-                </View>
-              </View>
             ))}
         </Card>
       </View>
@@ -652,8 +717,15 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
   const bondPct = s.bondMonths ? Math.min(100, Math.round((served / s.bondMonths) * 100)) : null;
   let bondLeftLabel: string | null = null;
   let bondLeftColor: string = C.textMid;
-  if (s.bondMonths && placements.length) {
-    if (s.stage === 'bond-completed' || served >= s.bondMonths) { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
+  if (s.stage === 'bond-completed') { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
+  else if (s.stage !== 'withdrawn' && s.bondEndDate) {
+    const d = Math.round((new Date(s.bondEndDate).getTime() - Date.now()) / 86400000);
+    if (!Number.isNaN(d)) {
+      if (d <= 0) { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
+      else { bondLeftLabel = `${d}d`; bondLeftColor = d < 90 ? C.amber : C.textMid; }
+    }
+  } else if (s.bondMonths && placements.length) {
+    if (served >= s.bondMonths) { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
     else if (!active) { bondLeftLabel = 'Paused'; bondLeftColor = C.amber; }
     else { const days = Math.max(0, Math.round((s.bondMonths - served) * 30.44)); bondLeftLabel = `${days}d`; bondLeftColor = days < 90 ? C.amber : C.textMid; }
   }
@@ -725,7 +797,7 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
                     <View style={[tbl.pStatus, { backgroundColor: st.bg }]}><Text style={[tbl.pStatusText, { color: st.fg }]}>{st.label}</Text></View>
                   </View>
                   <Text style={tbl.meta}>{p.role}</Text>
-                  <Text style={tbl.histDates}>{p.startDate} → {p.endDate ?? 'Present'}{p.note ? `  ·  ${p.note}` : ''}</Text>
+                  <Text style={tbl.histDates}>{p.startDate} → {p.endDate ?? 'Present'}{typeof p.months === 'number' ? `  ·  ${p.months}mo` : ''}{p.note ? `  ·  ${p.note}` : ''}</Text>
                 </View>
               );
             })}
@@ -1170,16 +1242,17 @@ const em = StyleSheet.create({
 
 const SERIES = [
   { key: 'enrolled' as const, label: 'Enrolled', color: CHART.indigo },
-  { key: 'graduated' as const, label: 'Graduated', color: CHART.violet },
   { key: 'placed' as const, label: 'Placed', color: CHART.emerald },
+  { key: 'seconded' as const, label: 'Seconded', color: CHART.violet },
 ];
 
-function Funnel({ enrolled, graduated, placed }: { enrolled: number; graduated: number; placed: number }) {
+function Funnel({ enrolled, graduated, placed, labels }: { enrolled: number; graduated: number; placed: number; labels?: [string, string, string] }) {
   const grown = useGrow();
+  const L = labels ?? ['Enrolled', 'Graduated', 'Placed'];
   const steps = [
-    { label: 'Enrolled', n: enrolled, color: CHART.indigo, pct: 100 },
-    { label: 'Graduated', n: graduated, color: CHART.violet, pct: enrolled ? Math.round((graduated / enrolled) * 100) : 0 },
-    { label: 'Placed', n: placed, color: CHART.emerald, pct: enrolled ? Math.round((placed / enrolled) * 100) : 0 },
+    { label: L[0], n: enrolled, color: CHART.indigo, pct: 100 },
+    { label: L[1], n: graduated, color: CHART.violet, pct: enrolled ? Math.round((graduated / enrolled) * 100) : 0 },
+    { label: L[2], n: placed, color: CHART.emerald, pct: enrolled ? Math.round((placed / enrolled) * 100) : 0 },
   ];
   return (
     <View style={{ gap: 16, paddingTop: 4 }}>
@@ -1201,20 +1274,42 @@ function Funnel({ enrolled, graduated, placed }: { enrolled: number; graduated: 
 function WebGrowth() {
   const { accessToken } = useAuth();
   const nav = useNav();
-  const [growth, setGrowth] = useState<CohortGrowthPoint[]>([]);
-  useEffect(() => { fetchCohortGrowth(accessToken).then(setGrowth); }, []);
   const grown = useGrow();
-  if (!growth.length) return <Loader />;
+  const [students, setStudents] = useState<StaffStudentRecord[] | null>(null);
+  useEffect(() => {
+    fetchStaffStudentRoster(accessToken).then((roster) => {
+      if (isSupabaseConfigured) { setStudents(roster); return; }
+      const ov = mgmt.getPlacementOverrides();
+      setStudents(roster.map((s) => (ov[s.studentId] ? { ...s, ...ov[s.studentId] } : s)));
+    });
+  }, []);
+  if (!students) return <Loader />;
 
-  const maxVal = Math.max(...growth.flatMap((g) => [g.enrolled, g.graduated, g.placed]), 1);
+  const everPlaced = (s: StaffStudentRecord) => (s.placements && s.placements.length > 0) || Boolean(s.placementCompany);
+  const sc = (n: string) => n.replace(/\s+/g, '');
+  type CPoint = { cohortName: string; enrolled: number; placed: number; seconded: number; year: number };
+  const byCohort: Record<string, CPoint> = {};
+  students.forEach((s) => {
+    const k = s.cohortName || 'Other';
+    if (!byCohort[k]) byCohort[k] = { cohortName: k, enrolled: 0, placed: 0, seconded: 0, year: 0 };
+    byCohort[k].enrolled++;
+    if (everPlaced(s)) byCohort[k].placed++;
+    if (trainCategory(s) === 'seconded') byCohort[k].seconded++;
+    const y = Number((s.dateJoined || '').slice(0, 4));
+    if (y && (!byCohort[k].year || y < byCohort[k].year)) byCohort[k].year = y;
+  });
+  const points = Object.values(byCohort).sort((a, b) => (a.year - b.year) || a.cohortName.localeCompare(b.cohortName));
+  const recent = points.slice(-14);
+  const maxVal = Math.max(...recent.flatMap((p) => [p.enrolled, p.placed, p.seconded]), 1);
   const overall = {
-    enrolled: growth.reduce((s, g) => s + g.enrolled, 0),
-    graduated: growth.reduce((s, g) => s + g.graduated, 0),
-    placed: growth.reduce((s, g) => s + g.placed, 0),
+    enrolled: points.reduce((s, p) => s + p.enrolled, 0),
+    placed: points.reduce((s, p) => s + p.placed, 0),
+    seconded: points.reduce((s, p) => s + p.seconded, 0),
   };
-  const trend = growth.filter((g) => g.graduated > 0).map((g) => ({ label: g.cohortName.replace('Cohort ', 'C'), value: Math.round((g.placed / g.graduated) * 100) }));
+  const rate = overall.enrolled ? Math.round((overall.placed / overall.enrolled) * 100) : 0;
+  const trend = recent.filter((p) => p.enrolled > 0).map((p) => ({ label: sc(p.cohortName), value: Math.round((p.placed / p.enrolled) * 100) }));
   const byYear: Record<number, number> = {};
-  growth.forEach((g) => { byYear[g.year] = (byYear[g.year] ?? 0) + g.enrolled; });
+  points.forEach((p) => { if (p.year) byYear[p.year] = (byYear[p.year] ?? 0) + p.enrolled; });
   const years = Object.entries(byYear).sort((a, b) => Number(a[0]) - Number(b[0]));
   const maxYear = Math.max(...years.map(([, n]) => n), 1);
   const YEAR_COL = CHART_SERIES;
@@ -1223,9 +1318,9 @@ function WebGrowth() {
     <Page>
       <View style={u.kpiRow}>
         <KpiCard label="Total Enrolled" value={overall.enrolled} icon="users" tint={C.blue} soft={C.blueSoft} onPress={() => nav.navigate('students')} />
-        <KpiCard label="Graduated" value={overall.graduated} icon="cap" tint={C.violet} soft={C.violetSoft} onPress={() => nav.navigate('students')} />
-        <KpiCard label="Placed" value={overall.placed} icon="briefcase" tint={C.green} soft={C.greenSoft} onPress={() => nav.navigate('students', { stage: 'on-placement' })} />
-        <KpiCard label="Placement Rate" value={overall.graduated ? Math.round(overall.placed / overall.graduated * 100) : 0} suffix="%" icon="trending" tint={C.brand} soft={C.brandSoft} onPress={() => nav.navigate('dashboard')} />
+        <KpiCard label="Ever Placed" value={overall.placed} icon="briefcase" tint={C.green} soft={C.greenSoft} onPress={() => nav.navigate('students')} />
+        <KpiCard label="Currently Seconded" value={overall.seconded} icon="cap" tint={C.violet} soft={C.violetSoft} onPress={() => nav.navigate('students', { stage: 'on-placement' })} />
+        <KpiCard label="Placement Rate" value={rate} suffix="%" icon="trending" tint={C.brand} soft={C.brandSoft} onPress={() => nav.navigate('dashboard')} />
       </View>
 
       <View style={u.colsWrap}>
@@ -1240,15 +1335,15 @@ function WebGrowth() {
               ))}
             </View>
           }>Cohort Outcomes</CardTitle>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 16, height: 210, paddingTop: 16 }}>
-            {growth.map((row) => (
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 12, height: 210, paddingTop: 16 }}>
+            {recent.map((row) => (
               <TouchableOpacity key={row.cohortName} activeOpacity={0.7} onPress={() => nav.navigate('students', { cohort: row.cohortName })} {...({ dataSet: { btn: '1' } } as any)} style={{ flex: 1, alignItems: 'center', height: '100%' }}>
-                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 4, width: '100%' }}>
+                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 3, width: '100%' }}>
                   {SERIES.map((se) => (
-                    <View key={se.key} {...({ dataSet: { bar: '1' } } as any)} style={{ flex: 1, maxWidth: 16, backgroundColor: se.color, borderTopLeftRadius: 4, borderTopRightRadius: 4, height: grown ? `${(row[se.key] / maxVal) * 100}%` as any : '0%' }} />
+                    <View key={se.key} {...({ dataSet: { bar: '1' } } as any)} style={{ flex: 1, maxWidth: 14, backgroundColor: se.color, borderTopLeftRadius: 4, borderTopRightRadius: 4, height: grown ? `${(row[se.key] / maxVal) * 100}%` as any : '0%' }} />
                   ))}
                 </View>
-                <Text style={{ fontSize: 11, color: C.textMute, marginTop: 8, fontWeight: '600' }}>{row.cohortName.replace('Cohort ', 'C')}</Text>
+                <Text style={{ fontSize: 10, color: C.textMute, marginTop: 8, fontWeight: '600' }} numberOfLines={1}>{sc(row.cohortName)}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -1263,10 +1358,11 @@ function WebGrowth() {
       <View style={[u.colsWrap, { marginTop: 16 }]}>
         <Card style={{ flex: 1, minWidth: 300 }} anim>
           <CardTitle>Outcome Funnel</CardTitle>
-          <Funnel enrolled={overall.enrolled} graduated={overall.graduated} placed={overall.placed} />
+          <Funnel enrolled={overall.enrolled} graduated={overall.placed} placed={overall.seconded} labels={['Enrolled', 'Ever Placed', 'Currently Seconded']} />
         </Card>
         <Card style={{ flex: 1, minWidth: 300 }} anim>
           <CardTitle>Enrolled by Year</CardTitle>
+          {years.length === 0 ? <Text style={{ fontSize: 13, color: C.textMute, paddingVertical: 20 }}>No join dates recorded.</Text> : (
           <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 16, height: 180, paddingTop: 12 }}>
             {years.map(([yr, n], i) => (
               <View key={yr} style={{ flex: 1, alignItems: 'center', height: '100%' }}>
@@ -1278,32 +1374,31 @@ function WebGrowth() {
               </View>
             ))}
           </View>
+          )}
         </Card>
       </View>
 
       <Card style={{ marginTop: 16, padding: 0, overflow: 'hidden' }} anim>
         <View style={{ padding: 20, paddingBottom: 0 }}><CardTitle>Cohort Breakdown</CardTitle></View>
         <View style={tbl.thead}>
-          {['Cohort', 'Year', 'Enrolled', 'Graduated', 'Placed', 'Rate'].map((col) => <Text key={col} style={tbl.th}>{col}</Text>)}
+          {['Cohort', 'Year', 'Enrolled', 'Placed', 'Seconded', 'Rate'].map((col) => <Text key={col} style={tbl.th}>{col}</Text>)}
         </View>
-        {growth.map((row) => {
-          const rate = row.graduated > 0 ? Math.round(row.placed / row.graduated * 100) : null;
+        {points.map((row) => {
+          const r = row.enrolled ? Math.round((row.placed / row.enrolled) * 100) : 0;
           return (
             <TouchableOpacity key={row.cohortName} activeOpacity={0.7} onPress={() => nav.navigate('students', { cohort: row.cohortName })} {...({ dataSet: { row: '1' } } as any)} style={[tbl.row, { borderBottomWidth: 1, borderBottomColor: C.borderSoft }]}>
               <Text style={[tbl.cell, { fontWeight: '600', color: C.text }]}>{row.cohortName}</Text>
-              <Text style={tbl.cell}>{row.year}</Text>
+              <Text style={tbl.cell}>{row.year || '—'}</Text>
               <Text style={tbl.cell}>{row.enrolled}</Text>
-              <Text style={tbl.cell}>{row.graduated}</Text>
               <Text style={tbl.cell}>{row.placed}</Text>
+              <Text style={tbl.cell}>{row.seconded}</Text>
               <View style={tbl.cell}>
-                {rate !== null ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View style={{ flex: 1, maxWidth: 70, height: 6, backgroundColor: C.borderSoft, borderRadius: 3, overflow: 'hidden' }}>
-                      <View style={{ width: `${rate}%` as any, height: '100%', backgroundColor: rate >= 70 ? C.greenDot : C.amberDot, borderRadius: 3 }} />
-                    </View>
-                    <Text style={{ fontSize: 12.5, fontWeight: '700', color: rate >= 70 ? C.green : C.amber }}>{rate}%</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={{ flex: 1, maxWidth: 70, height: 6, backgroundColor: C.borderSoft, borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ width: `${r}%` as any, height: '100%', backgroundColor: r >= 70 ? C.greenDot : C.amberDot, borderRadius: 3 }} />
                   </View>
-                ) : <Text style={tbl.cell}>—</Text>}
+                  <Text style={{ fontSize: 12.5, fontWeight: '700', color: r >= 70 ? C.green : C.amber }}>{r}%</Text>
+                </View>
               </View>
             </TouchableOpacity>
           );

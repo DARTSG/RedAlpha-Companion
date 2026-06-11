@@ -334,7 +334,7 @@ export function monthsBetween(startISO: string, endISO: string): number {
 export function bondServedMonths(placements: PlacementRecord[] | undefined, now = Date.now()): number {
   if (!placements?.length) return 0;
   const nowISO = new Date(now).toISOString();
-  return placements.reduce((sum, p) => sum + monthsBetween(p.startDate, p.endDate ?? nowISO), 0);
+  return placements.reduce((sum, p) => sum + (typeof p.months === 'number' ? p.months : monthsBetween(p.startDate, p.endDate ?? nowISO)), 0);
 }
 
 export function activePlacement(placements: PlacementRecord[] | undefined): PlacementRecord | undefined {

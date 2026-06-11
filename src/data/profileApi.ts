@@ -175,6 +175,7 @@ export async function getAllStudents(_accessToken: string | null): Promise<Staff
       contactNo: row.contact_no ?? undefined,
       cohortName: row.cohort_name,
       stage: row.lifecycle_stage ?? 'on-course',
+      model: row.model ?? undefined,
       dateOfBirth: row.date_of_birth ?? undefined,
       dateJoined: row.date_joined ?? undefined,
       accountManager: row.account_manager ?? undefined,

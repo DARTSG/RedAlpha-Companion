@@ -170,6 +170,7 @@ export interface PlacementRecord {
   startDate: string;          // ISO date the placement began
   endDate?: string;           // ISO date it ended; undefined = ongoing
   status: 'active' | 'completed' | 'terminated';  // terminated = let go / fired
+  months?: number;   // total months of service (authoritative when dates are messy)
   note?: string;
 }
 
@@ -179,6 +180,7 @@ export interface StaffStudentRecord {
   email: string;
   cohortName: string;
   stage: StudentLifecycleStage;
+  model?: string;   // raw RA status: Secondment / Bond Buy Out / Training in Progress / etc.
   certifications: Certification[];
   // Onboarding fields
   dateOfBirth?: string;
