@@ -754,7 +754,7 @@ function StudentRow({ s, onEdit, trainingEnd, onRefresh }: { s: StaffStudentReco
   const currentRole = active?.role ?? s.placementRole ?? null;
   const served = mgmt.bondServedMonths(placements);
   const bondMode = s.bondMode ?? 'accumulative';
-  const reqMonths = s.bondMonths ?? 24;
+  const reqMonths = s.bondMonths ?? 36;
   const bondPct = Math.min(100, Math.round((served / reqMonths) * 100));
   let bondLeftLabel: string | null = null;
   let bondLeftColor: string = C.textMid;
@@ -878,16 +878,6 @@ function StudentRow({ s, onEdit, trainingEnd, onRefresh }: { s: StaffStudentReco
                 </View>
               );
             })}
-            {(s.performanceReports ?? []).length > 0 && (
-              <>
-                <Text style={tbl.panelLabel2}>Performance Reports</Text>
-                {(s.performanceReports ?? []).map((r) => (
-                  <TouchableOpacity key={`${r.year}-${r.url}`} onPress={() => openUrl(r.url)} {...({ dataSet: { btn: '1' } } as any)} style={{ paddingVertical: 3 }}>
-                    <Text style={{ fontSize: 12, color: C.blue, fontWeight: '600' }}>{r.year} — {r.filename ?? 'report'}</Text>
-                  </TouchableOpacity>
-                ))}
-              </>
-            )}
           </View>
 
           <View style={{ flex: 1, minWidth: 220 } as any}>
@@ -904,6 +894,13 @@ function StudentRow({ s, onEdit, trainingEnd, onRefresh }: { s: StaffStudentReco
                 <Text style={[tbl.histDates, { marginTop: 8 }]}>{s.stage === 'bond-completed' ? 'Bond completed.' : active ? 'Accruing — on placement.' : 'Paused — on bench (accumulative bond).'}</Text>
               </View>
             )}
+            <Detail label="Bond mode" value={bondMode === 'end_date' ? 'Fixed end date' : 'Accumulative (pauses on bench)'} />
+            <Text style={tbl.panelLabel2}>Performance Reports</Text>
+            {(s.performanceReports ?? []).length === 0 ? <Text style={tbl.meta}>None uploaded.</Text> : (s.performanceReports ?? []).map((r) => (
+              <TouchableOpacity key={`${r.year}-${r.url}`} onPress={() => openUrl(r.url)} {...({ dataSet: { btn: '1' } } as any)} style={{ paddingVertical: 3 }}>
+                <Text style={{ fontSize: 12, color: C.blue, fontWeight: '600' }}>{r.year} — {r.filename ?? 'view report'}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
 
           <View style={{ flex: 1, minWidth: 220 } as any}>
@@ -1023,7 +1020,7 @@ function bondMonthsLeft(s: StaffStudentRecord): number | null {
     const m = (new Date(s.bondEndDate).getTime() - Date.now()) / (86400000 * 30.44);
     return Number.isNaN(m) ? null : Math.max(0, m);
   }
-  return Math.max(0, (s.bondMonths ?? 24) - mgmt.bondServedMonths(s.placements));
+  return Math.max(0, (s.bondMonths ?? 36) - mgmt.bondServedMonths(s.placements));
 }
 
 const BOND_FILTERS = [
@@ -1058,7 +1055,7 @@ function WebStudents() {
   const [editPersonalEmail, setEditPersonalEmail] = useState('');
   const [editDateJoined, setEditDateJoined] = useState('');
   const [editCcp, setEditCcp] = useState<'yes' | 'completed' | 'no' | undefined>(undefined);
-  const [editBondMonths, setEditBondMonths] = useState('24');
+  const [editBondMonths, setEditBondMonths] = useState('36');
   const [editBondMode, setEditBondMode] = useState<'accumulative' | 'end_date'>('accumulative');
   const [editBondEnd, setEditBondEnd] = useState('');
   const [editPlacements, setEditPlacements] = useState<PlacementRecord[]>([]);
@@ -1157,7 +1154,7 @@ function WebStudents() {
     setEditTarget(s); setEditStage(s.stage);
     setEditCohort(s.cohortName); setEditDob(s.dateOfBirth ?? '');
     setEditAcctMgr(s.accountManager ?? ''); setEditContact(s.contactNo ?? ''); setEditPersonalEmail(s.personalEmail ?? ''); setEditDateJoined(s.dateJoined ?? ''); setEditCcp(s.ccpGrant);
-    setEditBondMonths(String(s.bondMonths ?? 24)); setEditBondMode(s.bondMode ?? 'accumulative'); setEditBondEnd(s.bondEndDate ?? '');
+    setEditBondMonths(String(s.bondMonths ?? 36)); setEditBondMode(s.bondMode ?? 'accumulative'); setEditBondEnd(s.bondEndDate ?? '');
     const existing: PlacementRecord[] = s.placements ? [...s.placements]
       : (s.placementCompany ? [{ id: 'p-legacy', company: s.placementCompany, role: s.placementRole ?? '', reportingOfficer: s.reportingOfficer, roEmail: s.roEmail, startDate: s.placementStartDate ?? today(), status: (s.stage === 'on-placement' ? 'active' : s.stage === 'bond-completed' ? 'completed' : 'terminated') }] : []);
     setEditPlacements(existing);
@@ -1485,7 +1482,7 @@ function WebStudents() {
               {editBondMode === 'accumulative' ? (
                 <View style={{ marginBottom: 22 }}>
                   <Text style={em.fieldLabel}>Required service (months)</Text>
-                  <TextInput style={[em.input as any, { maxWidth: 140 }]} value={editBondMonths} onChangeText={setEditBondMonths} keyboardType="numeric" placeholder="24" placeholderTextColor="#C2C9D6" />
+                  <TextInput style={[em.input as any, { maxWidth: 140 }]} value={editBondMonths} onChangeText={setEditBondMonths} keyboardType="numeric" placeholder="36" placeholderTextColor="#C2C9D6" />
                 </View>
               ) : (
                 <View style={{ marginBottom: 22 }}>
@@ -1827,22 +1824,37 @@ function WebNews() {
   const [fAchiever, setFAchiever] = useState('');
   const [fCohort, setFCohort] = useState('');
   const [fCert, setFCert] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => { fetchAnnouncements(accessToken).then((a) => { setItems(a); setLoading(false); }); }, []);
 
   function openAdd() {
+    setEditingId(null);
     setFType(tab === 'community' ? 'achievement' : 'update');
     setFTitle(''); setFBody(''); setFAudience('all'); setFPinned(false);
     setFAchiever(''); setFCohort(''); setFCert('');
     setAdding(true);
   }
+  function openEdit(item: Announcement) {
+    setEditingId(item.id);
+    setFType(item.type); setFTitle(item.title); setFBody(item.body);
+    setFAudience(item.audience); setFPinned(Boolean(item.pinned));
+    setFAchiever(item.achieverName ?? ''); setFCohort(item.achieverCohort ?? ''); setFCert(item.certificationName ?? '');
+    setAdding(true);
+  }
+  function deletePost(item: Announcement) {
+    const ok = typeof window === 'undefined' ? true : window.confirm(`Delete "${item.title}"?`);
+    if (!ok) return;
+    mgmt.deleteAnnouncement(item.id).then(() => fetchAnnouncements(accessToken)).then(setItems);
+  }
   function savePost() {
     if (!fTitle.trim()) return;
     setSaving(true);
+    const original = editingId ? items.find((i) => i.id === editingId) : undefined;
     const post: Announcement = {
-      id: `a-${Date.now()}`, type: fType, title: fTitle.trim(), body: fBody.trim(),
-      postedAt: new Date().toISOString(), audience: fAudience, pinned: fPinned || undefined,
-      author: user?.displayName ?? 'Staff',
+      id: editingId ?? `a-${Date.now()}`, type: fType, title: fTitle.trim(), body: fBody.trim(),
+      postedAt: original?.postedAt ?? new Date().toISOString(), audience: fAudience, pinned: fPinned || undefined,
+      author: original?.author ?? user?.displayName ?? 'Staff',
       ...(fType === 'achievement' ? { achieverName: fAchiever.trim() || undefined, achieverCohort: fCohort.trim() || undefined, certificationName: fCert.trim() || undefined } : {}),
     };
     mgmt.saveAnnouncement(post).then(() => fetchAnnouncements(accessToken)).then((a) => { setItems(a); setSaving(false); setAdding(false); setTab(fType === 'achievement' ? 'community' : 'announcements'); });
@@ -1888,7 +1900,11 @@ function WebNews() {
                     )}
                     <View style={news.audTag}><Text style={news.audText}>{item.audience}</Text></View>
                   </View>
-                  <Text style={news.date}>{new Date(item.postedAt).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={news.date}>{new Date(item.postedAt).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                    <TouchableOpacity onPress={() => openEdit(item)} style={news.cardAct} {...({ dataSet: { btn: '1' } } as any)}><Icon name="edit" size={13} color={C.textMid} /></TouchableOpacity>
+                    <TouchableOpacity onPress={() => deletePost(item)} style={news.cardAct} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={13} color="#B42318" /></TouchableOpacity>
+                  </View>
                 </View>
                 <Text style={news.title}>{item.title}</Text>
                 {item.type === 'achievement' && item.achieverName ? (
@@ -1924,7 +1940,7 @@ function WebNews() {
         <View style={em.backdrop}>
           <View style={em.sheet} {...({ dataSet: { card: '1' } } as any)}>
             <View style={em.head}>
-              <Text style={em.title}>New {fType === 'achievement' ? 'community' : 'announcement'} post</Text>
+              <Text style={em.title}>{editingId ? 'Edit post' : `New ${fType === 'achievement' ? 'community' : 'announcement'} post`}</Text>
               <TouchableOpacity onPress={() => setAdding(false)} style={em.close} {...({ dataSet: { btn: '1' } } as any)}><Icon name="close" size={15} color={C.textMid} /></TouchableOpacity>
             </View>
             <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ padding: 24 }}>
@@ -1969,7 +1985,7 @@ function WebNews() {
             </ScrollView>
             <View style={em.foot}>
               <TouchableOpacity style={em.cancel} onPress={() => setAdding(false)} {...({ dataSet: { btn: '1' } } as any)}><Text style={em.cancelText}>Cancel</Text></TouchableOpacity>
-              <TouchableOpacity style={em.save} onPress={savePost} disabled={saving} {...({ dataSet: { btn: '1' } } as any)}><Text style={em.saveText}>{saving ? 'Posting…' : 'Post'}</Text></TouchableOpacity>
+              <TouchableOpacity style={em.save} onPress={savePost} disabled={saving} {...({ dataSet: { btn: '1' } } as any)}><Text style={em.saveText}>{saving ? 'Saving…' : editingId ? 'Save changes' : 'Post'}</Text></TouchableOpacity>
             </View>
           </View>
         </View>
@@ -2005,6 +2021,7 @@ const news = StyleSheet.create({
   authorInitial: { fontSize: 11, fontWeight: '700', color: C.slate },
   author: { fontSize: 12, fontWeight: '600', color: C.textMid },
   reaction: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.slateSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 14 },
+  cardAct: { padding: 5, borderRadius: 6, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
   reactionCount: { fontSize: 11.5, fontWeight: '600', color: C.textMid },
 });
 
@@ -2049,7 +2066,7 @@ function Field({ label, value, onChange, ph, numeric }: { label: string; value: 
   );
 }
 
-function CohortCard({ cohort }: { cohort: Cohort }) {
+function CohortCard({ cohort, onEdit, onDelete }: { cohort: Cohort; onEdit: (c: Cohort) => void; onDelete?: (c: Cohort) => void }) {
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [weeks, setWeeks] = useState<SyllabusWeek[]>([]);
@@ -2072,6 +2089,14 @@ function CohortCard({ cohort }: { cohort: Cohort }) {
           {cohort.moodleName ? <Text style={[tbl.meta, { color: C.violet }]}>Moodle: {cohort.moodleName}</Text> : null}
         </View>
         {cohort.active && <View style={mst.activeTag}><Text style={mst.activeTagText}>Active</Text></View>}
+        <TouchableOpacity onPress={() => onEdit(cohort)} style={tbl.iconBtn} {...({ dataSet: { btn: '1' } } as any)}>
+          <Icon name="edit" size={13} color={C.textMid} /><Text style={tbl.iconBtnText}>Edit</Text>
+        </TouchableOpacity>
+        {onDelete && (
+          <TouchableOpacity onPress={() => onDelete(cohort)} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}>
+            <Icon name="trash" size={14} color="#B42318" />
+          </TouchableOpacity>
+        )}
         <View {...({ dataSet: { chevron: '1' } } as any)} style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}><Icon name="chevron" size={15} color={C.textMute} /></View>
       </TouchableOpacity>
       {open && (
@@ -2088,7 +2113,7 @@ function CohortCard({ cohort }: { cohort: Cohort }) {
             </View>
           ))}
           <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-            <TouchableOpacity onPress={addWeek} style={em.addBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={14} color={C.brand} /><Text style={em.addBtnText}>Add week</Text></TouchableOpacity>
+            <TouchableOpacity onPress={addWeek} style={tbl.iconBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={13} color={C.textMid} /><Text style={tbl.iconBtnText}>Add week</Text></TouchableOpacity>
             <TouchableOpacity onPress={save} style={mst.saveBtn} {...({ dataSet: { btn: '1' } } as any)}><Text style={mst.saveBtnText}>Save syllabus</Text></TouchableOpacity>
             {savedMsg && <Text style={{ fontSize: 12, color: C.green, fontWeight: '600' }}>Saved</Text>}
           </View>
@@ -2099,6 +2124,8 @@ function CohortCard({ cohort }: { cohort: Cohort }) {
 }
 
 function WebManage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useState<'cohorts' | 'upskilling'>('cohorts');
   const [cohorts, setCohorts] = useState<Cohort[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -2106,12 +2133,28 @@ function WebManage() {
   useEffect(() => { mgmt.getCohorts().then(setCohorts).catch(() => setCohorts([])); mgmt.getCourses().then(setCourses).catch(() => setCourses([])); }, [tick]);
 
   const [cAddOpen, setCAddOpen] = useState(false);
+  const [cEditing, setCEditing] = useState<Cohort | null>(null);
   const [cName, setCName] = useState(''); const [cMoodle, setCMoodle] = useState(''); const [cTrack, setCTrack] = useState('Cybersecurity');
   const [cStart, setCStart] = useState(''); const [cEnd, setCEnd] = useState('');
-  function addCohort() {
+  const [cActive, setCActive] = useState(true);
+  function openAddCohort() {
+    setCEditing(null); setCName(''); setCMoodle(''); setCTrack('Cybersecurity'); setCStart(''); setCEnd(''); setCActive(true);
+    setCAddOpen(true);
+  }
+  function openEditCohort(c: Cohort) {
+    setCEditing(c); setCName(c.name); setCMoodle(c.moodleName ?? ''); setCTrack(c.track || 'Cybersecurity');
+    setCStart(c.startDate === 'TBD' ? '' : c.startDate); setCEnd(c.endDate === 'TBD' ? '' : c.endDate); setCActive(c.active);
+    setCAddOpen(true);
+  }
+  function saveCohortForm() {
     if (!cName.trim()) return;
-    mgmt.saveCohort({ id: `c-${Date.now()}`, name: cName.trim(), moodleName: cMoodle.trim() || undefined, track: cTrack.trim() || 'Cybersecurity', startDate: cStart || 'TBD', endDate: cEnd || 'TBD', studentCount: 0, color: CHART_SERIES[cohorts.length % CHART_SERIES.length], active: true })
-      .then(() => { setCName(''); setCMoodle(''); setCStart(''); setCEnd(''); setTick((t) => t + 1); setCAddOpen(false); });
+    const base = cEditing ?? { id: `c-${Date.now()}`, studentCount: 0, color: CHART_SERIES[cohorts.length % CHART_SERIES.length] } as Cohort;
+    mgmt.saveCohort({ ...base, name: cName.trim(), moodleName: cMoodle.trim() || undefined, track: cTrack.trim() || 'Cybersecurity', startDate: cStart || 'TBD', endDate: cEnd || 'TBD', active: cActive })
+      .then(() => { setTick((t) => t + 1); setCAddOpen(false); setCEditing(null); });
+  }
+  function deleteCohortConfirm(c: Cohort) {
+    const ok = typeof window === 'undefined' ? true : window.confirm(`Delete ${c.name}? Its syllabus is removed too. Students stay but keep the cohort name as text.`);
+    if (ok) mgmt.deleteCohort(c.id).then(() => setTick((t) => t + 1));
   }
 
   const [coTitle, setCoTitle] = useState(''); const [coProvider, setCoProvider] = useState('');
@@ -2139,9 +2182,9 @@ function WebManage() {
         <View style={{ width: '100%' }}>
           <View style={news.bar2}>
             <Text style={u.cardTitle}>{cohorts.length} cohorts · tap one to edit its weekly syllabus</Text>
-            <TouchableOpacity onPress={() => setCAddOpen(true)} style={news.newBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={14} color="#fff" /><Text style={news.newBtnText}>Add cohort</Text></TouchableOpacity>
+            <TouchableOpacity onPress={openAddCohort} style={news.newBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="plus" size={14} color="#fff" /><Text style={news.newBtnText}>Add cohort</Text></TouchableOpacity>
           </View>
-          <View style={{ gap: 10, width: '100%' }}>{cohorts.map((co) => <CohortCard key={co.id} cohort={co} />)}</View>
+          <View style={{ gap: 10, width: '100%' }}>{cohorts.map((co) => <CohortCard key={co.id} cohort={co} onEdit={openEditCohort} onDelete={isAdmin ? deleteCohortConfirm : undefined} />)}</View>
         </View>
       ) : (
         <View style={u.colsWrap}>
@@ -2189,7 +2232,7 @@ function WebManage() {
         <View style={em.backdrop}>
           <View style={[em.sheet, { width: 460 }]} {...({ dataSet: { card: '1' } } as any)}>
             <View style={em.head}>
-              <Text style={em.title}>Add cohort</Text>
+              <Text style={em.title}>{cEditing ? `Edit ${cEditing.name}` : 'Add cohort'}</Text>
               <TouchableOpacity onPress={() => setCAddOpen(false)} style={em.close} {...({ dataSet: { btn: '1' } } as any)}><Icon name="close" size={15} color={C.textMid} /></TouchableOpacity>
             </View>
             <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ padding: 24 }}>
@@ -2198,10 +2241,14 @@ function WebManage() {
               <Field label="Track" value={cTrack} onChange={setCTrack} ph="e.g. Cybersecurity" />
               <Field label="Start date" value={cStart} onChange={setCStart} ph="YYYY-MM-DD" />
               <Field label="End date" value={cEnd} onChange={setCEnd} ph="YYYY-MM-DD" />
+              <TouchableOpacity onPress={() => setCActive((v) => !v)} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 }} {...({ dataSet: { btn: '1' } } as any)}>
+                <View style={[em.checkbox, cActive && { backgroundColor: C.greenDot, borderColor: C.greenDot }]}>{cActive && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>✓</Text>}</View>
+                <Text style={{ fontSize: 13, color: C.textMid, fontWeight: '500' }}>Active cohort</Text>
+              </TouchableOpacity>
             </ScrollView>
             <View style={em.foot}>
               <TouchableOpacity style={em.cancel} onPress={() => setCAddOpen(false)} {...({ dataSet: { btn: '1' } } as any)}><Text style={em.cancelText}>Cancel</Text></TouchableOpacity>
-              <TouchableOpacity style={em.save} onPress={addCohort} {...({ dataSet: { btn: '1' } } as any)}><Text style={em.saveText}>Create cohort</Text></TouchableOpacity>
+              <TouchableOpacity style={em.save} onPress={saveCohortForm} {...({ dataSet: { btn: '1' } } as any)}><Text style={em.saveText}>{cEditing ? 'Save changes' : 'Create cohort'}</Text></TouchableOpacity>
             </View>
           </View>
         </View>

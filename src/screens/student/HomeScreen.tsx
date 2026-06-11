@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
+import { Animated, Linking, Platform, RefreshControl,
+  ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { ProfileScreen } from './ProfileScreen';
-import { fetchAnnouncements, fetchMoodleScores, fetchStudentStats } from '@/data/api';
-import { mockCohorts } from '@/data/mockData';
+import { fetchAnnouncements, fetchCohorts, fetchMoodleScores, fetchStudentStats } from '@/data/api';
+import { Cohort } from '@/types';
 import { Announcement, MoodleCourseScore, StudentStats } from '@/types';
 import { Card } from '@/components/Card';
 import { ProgressBar } from '@/components/ProgressBar';
@@ -283,25 +284,31 @@ export function HomeScreen() {
   const [stats, setStats] = useState<StudentStats | null>(null);
   const [scores, setScores] = useState<MoodleCourseScore[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [cohorts, setCohorts] = useState<Cohort[]>([]);
 
   const heroStyle = useEntrance(0);
   const statsStyle = useEntrance(120);
   const gradeStyle = useEntrance(220);
   const announcStyle = useEntrance(320);
 
-  useEffect(() => {
-    Promise.all([
+  const [refreshing, setRefreshing] = useState(false);
+  function loadAll() {
+    return Promise.all([
       fetchStudentStats(accessToken),
       fetchMoodleScores(accessToken),
       fetchAnnouncements(accessToken),
-    ]).then(([s, sc, a]) => {
+      fetchCohorts(accessToken).catch(() => [] as Cohort[]),
+    ]).then(([s, sc, a, cs]) => {
       setStats(s);
       setScores(sc);
       setAnnouncements(a.filter((x) => x.audience !== 'staff'));
+      setCohorts(cs);
     });
-  }, []);
+  }
+  useEffect(() => { loadAll(); }, []);
+  function onRefresh() { setRefreshing(true); loadAll().finally(() => setRefreshing(false)); }
 
-  const cohort = mockCohorts.find((c) => c.id === cohortId) ?? mockCohorts[3];
+  const cohort = cohorts.find((c) => c.id === cohortId || c.name === cohortId) ?? cohorts.find((c) => c.active);
   const firstName = user?.displayName?.split(' ')[0] ?? 'there';
   const topAnnouncement = announcements.find((a) => a.pinned) ?? announcements[0];
 
@@ -329,7 +336,12 @@ export function HomeScreen() {
         </Animated.View>
       </View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+      >
 
         {/* ── Progress / Placement card ── */}
         {stats && (
