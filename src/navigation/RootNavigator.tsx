@@ -275,6 +275,24 @@ function StaffTabs() {
 // Loading
 // ---------------------------------------------------------------------------
 
+function StudentViewBanner() {
+  const { exitStudentView } = useAuth();
+  return (
+    <SafeAreaView edges={['top']} style={{ backgroundColor: '#0E7090' }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, paddingVertical: 7, paddingHorizontal: 14 }}>
+        <Text style={{ color: '#FFF', fontSize: 12.5, fontWeight: '700' }}>👀 Student view — you're testing as a student</Text>
+        <TouchableOpacity
+          onPress={exitStudentView}
+          style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 }}
+          activeOpacity={0.8}
+        >
+          <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>Exit to admin</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
 function LoadingScreen() {
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.headerBg }}>
@@ -288,11 +306,13 @@ function LoadingScreen() {
 // ---------------------------------------------------------------------------
 
 export function RootNavigator() {
-  const { user, cohortId, profileComplete, isLoading } = useAuth();
+  const { user, cohortId, profileComplete, isLoading, viewAsStudent } = useAuth();
 
   if (isLoading) return <LoadingScreen />;
 
-  const isStaff = user?.role === 'staff' || user?.role === 'admin';
+  // In student view (admin testing), staff are routed through the student flow.
+  const isStaff = (user?.role === 'staff' || user?.role === 'admin') && !viewAsStudent;
+  const showBanner = Boolean(user) && viewAsStudent;
 
   // Staff on web gets the professional portal (no NavigationContainer needed)
   if (user && isStaff && Platform.OS === 'web') {
@@ -300,19 +320,22 @@ export function RootNavigator() {
   }
 
   return (
-    <NavigationContainer theme={navTheme}>
-      {!user ? (
-        <LoginScreen />
-      ) : isStaff ? (
-        // Staff: skip cohort picker, go straight to tabs
-        <StaffTabs />
-      ) : !cohortId ? (
-        <CohortPickerScreen />
-      ) : !profileComplete ? (
-        <OnboardingFormScreen />
-      ) : (
-        <StudentTabs />
-      )}
-    </NavigationContainer>
+    <View style={{ flex: 1 }}>
+      {showBanner && <StudentViewBanner />}
+      <NavigationContainer theme={navTheme}>
+        {!user ? (
+          <LoginScreen />
+        ) : isStaff ? (
+          // Staff: skip cohort picker, go straight to tabs
+          <StaffTabs />
+        ) : !cohortId ? (
+          <CohortPickerScreen />
+        ) : !profileComplete ? (
+          <OnboardingFormScreen />
+        ) : (
+          <StudentTabs />
+        )}
+      </NavigationContainer>
+    </View>
   );
 }

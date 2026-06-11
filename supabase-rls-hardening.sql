@@ -114,7 +114,7 @@ create table if not exists public.announcements (
 
 -- STEP 0 (now that tables surely exist): keep your own admin access.
 insert into public.staff_members (name, email, role, status)
-values ('Ron', 'ron_martziano@dart.com.sg', 'admin', 'active')
+values ('Ron', 'ron_martziano@redalphacyber.com', 'admin', 'active')
 on conflict (email) do update set role = 'admin', status = 'active';
 
 -- ============================================================================

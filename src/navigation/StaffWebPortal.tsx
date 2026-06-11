@@ -430,8 +430,8 @@ const sb = StyleSheet.create({
 // Top bar
 // ---------------------------------------------------------------------------
 
-function TopBar({ title, subtitle, userName, userEmail, userRole, onSignOut }: {
-  title: string; subtitle?: string; userName: string; userEmail?: string; userRole?: string; onSignOut: () => void;
+function TopBar({ title, subtitle, userName, userEmail, userRole, onSignOut, onStudentView }: {
+  title: string; subtitle?: string; userName: string; userEmail?: string; userRole?: string; onSignOut: () => void; onStudentView?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -456,6 +456,12 @@ function TopBar({ title, subtitle, userName, userEmail, userRole, onSignOut }: {
               {userEmail ? <Text style={tb.menuMeta}>{userEmail}</Text> : null}
               {userRole ? <View style={tb.roleTag}><Text style={tb.roleTagText}>{userRole}</Text></View> : null}
               <View style={{ height: 1, backgroundColor: C.borderSoft, marginVertical: 10 }} />
+              {onStudentView && (
+                <TouchableOpacity style={tb.menuItem} onPress={() => { setOpen(false); onStudentView(); }} {...({ dataSet: { btn: '1' } } as any)}>
+                  <Icon name="cap" size={15} color={C.textMid} />
+                  <Text style={tb.menuItemText}>View as student</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={tb.menuItem} onPress={() => { setOpen(false); onSignOut(); }} {...({ dataSet: { btn: '1' } } as any)}>
                 <Icon name="logout" size={15} color={C.brand} />
                 <Text style={tb.menuItemText}>Sign out</Text>
@@ -2522,7 +2528,7 @@ const PAGES: Record<string, { title: string; subtitle: string; component: React.
 };
 
 export function StaffWebPortal() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, enterStudentView } = useAuth();
   const [activeId, setActiveId] = useState('students');
   const [studentFilter, setStudentFilter] = useState<StudentFilter>(null);
   const navigate = (page: string, filter: StudentFilter = null) => { setStudentFilter(filter); setActiveId(page); };
@@ -2592,7 +2598,7 @@ export function StaffWebPortal() {
       <View style={portal.root}>
         <Sidebar active={safeId} onSelect={(id) => navigate(id)} onSignOut={handleSignOut} userName={userName} items={visibleNav} />
         <View style={portal.main}>
-          <TopBar title={page.title} subtitle={page.subtitle} userName={userName} userEmail={user?.email} userRole={user?.role} onSignOut={handleSignOut} />
+          <TopBar title={page.title} subtitle={page.subtitle} userName={userName} userEmail={user?.email} userRole={user?.role} onSignOut={handleSignOut} onStudentView={isAdmin ? enterStudentView : undefined} />
           <PageComponent key={safeId} />
         </View>
       </View>

@@ -17,6 +17,7 @@ const isWeb = Platform.OS === 'web';
 const DEMO_KEY = 'bootcamp-companion.demo.v1';
 const COHORT_STORAGE_KEY = 'bootcamp-companion.cohort.v1';
 const PROFILE_COMPLETE_KEY = 'bootcamp-companion.profileComplete.v1';
+const STUDENT_VIEW_KEY = 'bootcamp-companion.studentView.v1';
 
 async function storeGet(key: string): Promise<string | null> {
   if (isWeb) return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
@@ -40,6 +41,10 @@ interface AuthContextValue {
   isAuthenticating: boolean;
   cohortId: string | null;
   profileComplete: boolean;
+  /** Admin-only: experience the app as a brand-new student (testing). */
+  viewAsStudent: boolean;
+  enterStudentView: () => Promise<void>;
+  exitStudentView: () => Promise<void>;
   signInWithMicrosoft: () => Promise<void>;
   signInWithDemoAccount: (role: UserRole) => Promise<void>;
   selectCohort: (id: string) => Promise<void>;
@@ -54,6 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [cohortId, setCohortId] = useState<string | null>(null);
   const [profileComplete, setProfileComplete] = useState(false);
+  const [viewAsStudent, setViewAsStudent] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -93,13 +99,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cleanup: (() => void) | undefined;
     (async () => {
       try {
-        const [storedCohort, storedProfile, demoRaw] = await Promise.all([
+        const [storedCohort, storedProfile, demoRaw, studentView] = await Promise.all([
           storeGet(COHORT_STORAGE_KEY),
           storeGet(PROFILE_COMPLETE_KEY),
           storeGet(DEMO_KEY),
+          storeGet(STUDENT_VIEW_KEY),
         ]);
         if (storedCohort) setCohortId(storedCohort);
         if (storedProfile === 'true') setProfileComplete(true);
+        if (studentView === 'true') setViewAsStudent(true);
 
         const sb = getSupabaseClient();
         if (sb) {
@@ -153,6 +161,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await storeSet(DEMO_KEY, JSON.stringify(demoUser));
   }
 
+  /** Start the student experience from scratch (cohort enrolment onwards). */
+  async function enterStudentView() {
+    setCohortId(null);
+    setProfileComplete(false);
+    await storeDelete(COHORT_STORAGE_KEY);
+    await storeDelete(PROFILE_COMPLETE_KEY);
+    setViewAsStudent(true);
+    await storeSet(STUDENT_VIEW_KEY, 'true');
+  }
+
+  async function exitStudentView() {
+    setViewAsStudent(false);
+    await storeDelete(STUDENT_VIEW_KEY);
+  }
+
   async function selectCohort(id: string) {
     setCohortId(id);
     await storeSet(COHORT_STORAGE_KEY, id);
@@ -171,9 +194,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCohortId(null);
     setProfileComplete(false);
     setAuthError(null);
+    setViewAsStudent(false);
     await storeDelete(DEMO_KEY);
     await storeDelete(COHORT_STORAGE_KEY);
     await storeDelete(PROFILE_COMPLETE_KEY);
+    await storeDelete(STUDENT_VIEW_KEY);
   }
 
   const value: AuthContextValue = {
@@ -185,6 +210,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isAuthenticating,
     cohortId,
     profileComplete,
+    viewAsStudent,
+    enterStudentView,
+    exitStudentView,
     signInWithMicrosoft,
     signInWithDemoAccount,
     selectCohort,
