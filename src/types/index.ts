@@ -195,6 +195,7 @@ export interface StaffStudentRecord {
   // Bond: total months of service required before bond is completed.
   // Served time only accrues during active placements (paused while on bench).
   bondMonths?: number;
+  bondMode?: 'accumulative' | 'end_date';  // accumulative pauses on bench; end_date = fixed date
   // Full placement history (newest first). The active one (status 'active') is current.
   placements?: PlacementRecord[];
   // Legacy convenience fields (derived from the active placement)

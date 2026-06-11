@@ -184,6 +184,7 @@ export async function getAllStudents(_accessToken: string | null): Promise<Staff
       cvUrl: row.cv_url ?? undefined,
       cvFilename: row.cv_filename ?? undefined,
       bondMonths: row.bond_months ?? undefined,
+      bondMode: row.bond_mode ?? undefined,
       bondEndDate: row.bond_end_date ?? undefined,
       placementCompany: row.placement_company ?? undefined,
       placementRole: row.placement_role ?? undefined,
@@ -257,6 +258,7 @@ export interface StudentEdit {
   dateJoined?: string;
   ccpGrant?: 'yes' | 'completed' | 'no';
   bondMonths?: number;
+  bondMode?: 'accumulative' | 'end_date';
   placements?: PlacementRecord[];
   placementCompany?: string;
   placementRole?: string;
@@ -279,6 +281,7 @@ export async function updateStudentRecord(studentId: string, p: StudentEdit): Pr
     date_joined: p.dateJoined ?? null,
     ccp_grant: p.ccpGrant ?? null,
     bond_months: p.bondMonths ?? null,
+    bond_mode: p.bondMode ?? null,
     placements: p.placements ?? [],
     placement_company: p.placementCompany ?? null,
     placement_role: p.placementRole ?? null,

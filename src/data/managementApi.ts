@@ -55,50 +55,80 @@ export function newId(): string {
 // Cohorts
 // ---------------------------------------------------------------------------
 
-export function getCohorts(): Cohort[] {
+function mapCohort(r: any): Cohort {
+  return { id: String(r.id), name: r.name, moodleName: r.moodle_name ?? undefined, track: r.track ?? '', startDate: r.start_date ?? '', endDate: r.end_date ?? '', studentCount: r.student_count ?? 0, color: r.color ?? '#6366F1', active: r.active ?? true };
+}
+export async function getCohorts(): Promise<Cohort[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { const { data, error } = await sb.from('cohorts').select('*').order('name', { ascending: true }); if (!error && Array.isArray(data)) return data.map(mapCohort); }
+  }
   return read<Cohort[] | null>(K.cohorts, null) ?? mockCohorts;
 }
-export function saveCohort(c: Cohort): Cohort[] {
-  const list = getCohorts().slice();
+export async function saveCohort(c: Cohort): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('cohorts').upsert({ id: c.id, name: c.name, moodle_name: c.moodleName ?? null, track: c.track, start_date: c.startDate, end_date: c.endDate, student_count: c.studentCount, color: c.color, active: c.active }); return; }
+  }
+  const list = (read<Cohort[] | null>(K.cohorts, null) ?? mockCohorts).slice();
   const i = list.findIndex((x) => x.id === c.id);
   if (i >= 0) list[i] = c; else list.unshift(c);
   write(K.cohorts, list);
-  return list;
 }
-export function deleteCohort(id: string): Cohort[] {
-  const list = getCohorts().filter((c) => c.id !== id);
-  write(K.cohorts, list);
-  return list;
+export async function deleteCohort(id: string): Promise<void> {
+  if (isSupabaseConfigured) { const sb = getSupabaseClient(); if (sb) { await sb.from('cohorts').delete().eq('id', id); return; } }
+  write(K.cohorts, (read<Cohort[] | null>(K.cohorts, null) ?? mockCohorts).filter((c) => c.id !== id));
 }
 
 // ---------------------------------------------------------------------------
 // Courses (upskilling)
 // ---------------------------------------------------------------------------
 
-export function getCourses(): Course[] {
+function mapCourse(r: any): Course {
+  return { id: String(r.id), title: r.title, provider: r.provider ?? '', track: r.track, description: r.description ?? '', startDate: r.start_date ?? '', endDate: r.end_date ?? '', spotsTotal: r.spots_total ?? 0, spotsRemaining: r.spots_remaining ?? 0, status: r.status ?? 'open', color: r.color ?? '#6366F1' };
+}
+export async function getCourses(): Promise<Course[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { const { data, error } = await sb.from('courses').select('*').order('created_at', { ascending: false }); if (!error && Array.isArray(data)) return data.map(mapCourse); }
+  }
   return read<Course[] | null>(K.courses, null) ?? mockCourses;
 }
-export function saveCourse(c: Course): Course[] {
-  const list = getCourses().slice();
+export async function saveCourse(c: Course): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('courses').upsert({ id: c.id, title: c.title, provider: c.provider, track: c.track, description: c.description, start_date: c.startDate, end_date: c.endDate, spots_total: c.spotsTotal, spots_remaining: c.spotsRemaining, status: c.status, color: c.color }); return; }
+  }
+  const list = (read<Course[] | null>(K.courses, null) ?? mockCourses).slice();
   const i = list.findIndex((x) => x.id === c.id);
   if (i >= 0) list[i] = c; else list.unshift(c);
   write(K.courses, list);
-  return list;
 }
-export function deleteCourse(id: string): Course[] {
-  const list = getCourses().filter((c) => c.id !== id);
-  write(K.courses, list);
-  return list;
+export async function deleteCourse(id: string): Promise<void> {
+  if (isSupabaseConfigured) { const sb = getSupabaseClient(); if (sb) { await sb.from('courses').delete().eq('id', id); return; } }
+  write(K.courses, (read<Course[] | null>(K.courses, null) ?? mockCourses).filter((c) => c.id !== id));
 }
 
 // ---------------------------------------------------------------------------
 // Weekly syllabus (per cohort)
 // ---------------------------------------------------------------------------
 
-export function getSyllabus(cohortId: string): SyllabusWeek[] {
+export async function getSyllabus(cohortId: string): Promise<SyllabusWeek[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { const { data, error } = await sb.from('syllabus_weeks').select('*').eq('cohort_id', cohortId).order('week_number', { ascending: true }); if (!error && Array.isArray(data)) return data.map((r: any) => ({ weekNumber: r.week_number, title: r.title ?? '', topics: r.topics ?? '' })); }
+  }
   return read<SyllabusWeek[]>(K.syllabus(cohortId), []);
 }
-export function saveSyllabus(cohortId: string, weeks: SyllabusWeek[]): void {
+export async function saveSyllabus(cohortId: string, weeks: SyllabusWeek[]): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) {
+      await sb.from('syllabus_weeks').delete().eq('cohort_id', cohortId);
+      if (weeks.length) await sb.from('syllabus_weeks').insert(weeks.map((w) => ({ cohort_id: cohortId, week_number: w.weekNumber, title: w.title, topics: w.topics })));
+      return;
+    }
+  }
   write(K.syllabus(cohortId), weeks);
 }
 
@@ -139,20 +169,29 @@ export function savePlacement(studentId: string, o: PlacementOverride): void {
 // Announcements (news + community)
 // ---------------------------------------------------------------------------
 
-export function getAnnouncements(): Announcement[] {
+function mapAnnouncement(r: any): Announcement {
+  return { id: String(r.id), type: r.type, title: r.title, body: r.body ?? '', postedAt: r.posted_at ?? new Date().toISOString(), audience: r.audience ?? 'all', pinned: r.pinned ?? undefined, author: r.author ?? undefined, achieverName: r.achiever_name ?? undefined, achieverCohort: r.achiever_cohort ?? undefined, certificationName: r.certification_name ?? undefined, certProvider: r.cert_provider ?? undefined };
+}
+export async function getAnnouncements(): Promise<Announcement[]> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { const { data, error } = await sb.from('announcements').select('*').order('posted_at', { ascending: false }); if (!error && Array.isArray(data)) return data.map(mapAnnouncement); }
+  }
   return read<Announcement[] | null>(K.announcements, null) ?? mockAnnouncements;
 }
-export function saveAnnouncement(a: Announcement): Announcement[] {
-  const list = getAnnouncements().slice();
+export async function saveAnnouncement(a: Announcement): Promise<void> {
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { await sb.from('announcements').upsert({ id: a.id, type: a.type, title: a.title, body: a.body, posted_at: a.postedAt, audience: a.audience, pinned: a.pinned ?? false, author: a.author ?? null, achiever_name: a.achieverName ?? null, achiever_cohort: a.achieverCohort ?? null, certification_name: a.certificationName ?? null, cert_provider: a.certProvider ?? null }); return; }
+  }
+  const list = (read<Announcement[] | null>(K.announcements, null) ?? mockAnnouncements).slice();
   const i = list.findIndex((x) => x.id === a.id);
   if (i >= 0) list[i] = a; else list.unshift(a);
   write(K.announcements, list);
-  return list;
 }
-export function deleteAnnouncement(id: string): Announcement[] {
-  const list = getAnnouncements().filter((a) => a.id !== id);
-  write(K.announcements, list);
-  return list;
+export async function deleteAnnouncement(id: string): Promise<void> {
+  if (isSupabaseConfigured) { const sb = getSupabaseClient(); if (sb) { await sb.from('announcements').delete().eq('id', id); return; } }
+  write(K.announcements, (read<Announcement[] | null>(K.announcements, null) ?? mockAnnouncements).filter((a) => a.id !== id));
 }
 
 // ---------------------------------------------------------------------------

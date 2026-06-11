@@ -36,7 +36,7 @@ function delay<T>(value: T): Promise<T> {
 // ---- Cohorts ---------------------------------------------------------------
 
 export async function fetchCohorts(_accessToken: string | null): Promise<Cohort[]> {
-  return delay(mgmt.getCohorts());
+  return mgmt.getCohorts();
 }
 
 // ---- Student endpoints -----------------------------------------------------
@@ -50,7 +50,7 @@ export async function fetchMoodleScores(_accessToken: string | null): Promise<Mo
 }
 
 export async function fetchAnnouncements(_accessToken: string | null): Promise<Announcement[]> {
-  return delay(mgmt.getAnnouncements());
+  return mgmt.getAnnouncements();
 }
 
 export async function fetchStudentStats(_accessToken: string | null): Promise<StudentStats> {
@@ -58,7 +58,7 @@ export async function fetchStudentStats(_accessToken: string | null): Promise<St
 }
 
 export async function fetchCourses(_accessToken: string | null): Promise<Course[]> {
-  return delay(mgmt.getCourses());
+  return mgmt.getCourses();
 }
 
 // ---- Staff endpoints -------------------------------------------------------

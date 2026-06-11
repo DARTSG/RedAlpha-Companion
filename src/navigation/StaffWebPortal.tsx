@@ -448,7 +448,7 @@ const tb = StyleSheet.create({
   uAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.text, alignItems: 'center', justifyContent: 'center' },
   uAvatarText: { color: '#fff', fontSize: 11.5, fontWeight: '700' },
   uName: { fontSize: 13, fontWeight: '600', color: C.textMid, maxWidth: 180 },
-  overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 },
+  overlay: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 } as any,
   menu: { position: 'absolute', top: 44, right: 0, minWidth: 220, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, borderRadius: 12, padding: 14, zIndex: 50 },
   menuName: { fontSize: 13.5, fontWeight: '700', color: C.text },
   menuMeta: { fontSize: 12, color: C.textMute, marginTop: 2 },
@@ -610,7 +610,8 @@ function WebDashboard() {
                 <View key={seg.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
                   <View style={{ width: 11, height: 11, borderRadius: 3, backgroundColor: seg.color }} />
                   <Text style={{ flex: 1, fontSize: 12.5, color: C.textMid, fontWeight: '500' }}>{seg.label}</Text>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: C.text }}>{seg.value}</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: C.text, minWidth: 28, textAlign: 'right' }}>{seg.value}</Text>
+                  <Text style={{ fontSize: 11.5, color: C.textMute, fontWeight: '600', minWidth: 40, textAlign: 'right' }}>{Math.round((seg.value / (total || 1)) * 100)}%</Text>
                 </View>
               ))}
             </View>
@@ -714,20 +715,23 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
   const currentCompany = active?.company ?? s.placementCompany ?? null;
   const currentRole = active?.role ?? s.placementRole ?? null;
   const served = mgmt.bondServedMonths(placements);
-  const bondPct = s.bondMonths ? Math.min(100, Math.round((served / s.bondMonths) * 100)) : null;
+  const bondMode = s.bondMode ?? 'accumulative';
+  const reqMonths = s.bondMonths ?? 24;
+  const bondPct = Math.min(100, Math.round((served / reqMonths) * 100));
   let bondLeftLabel: string | null = null;
   let bondLeftColor: string = C.textMid;
   if (s.stage === 'bond-completed') { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
-  else if (s.stage !== 'withdrawn' && s.bondEndDate) {
-    const d = Math.round((new Date(s.bondEndDate).getTime() - Date.now()) / 86400000);
-    if (!Number.isNaN(d)) {
-      if (d <= 0) { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
-      else { bondLeftLabel = `${d}d`; bondLeftColor = d < 90 ? C.amber : C.textMid; }
+  else if (s.stage !== 'withdrawn') {
+    if (bondMode === 'end_date') {
+      if (s.bondEndDate) {
+        const d = Math.round((new Date(s.bondEndDate).getTime() - Date.now()) / 86400000);
+        if (!Number.isNaN(d)) { if (d <= 0) { bondLeftLabel = 'Done'; bondLeftColor = C.green; } else { bondLeftLabel = `${d}d`; bondLeftColor = d < 90 ? C.amber : C.textMid; } }
+      }
+    } else {
+      const remain = reqMonths - served;
+      if (remain <= 0) { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
+      else { bondLeftLabel = `${Math.ceil(remain)}mo`; bondLeftColor = (!active || remain < 3) ? C.amber : C.textMid; }
     }
-  } else if (s.bondMonths && placements.length) {
-    if (served >= s.bondMonths) { bondLeftLabel = 'Done'; bondLeftColor = C.green; }
-    else if (!active) { bondLeftLabel = 'Paused'; bondLeftColor = C.amber; }
-    else { const days = Math.max(0, Math.round((s.bondMonths - served) * 30.44)); bondLeftLabel = `${days}d`; bondLeftColor = days < 90 ? C.amber : C.textMid; }
   }
   const [interviews, setInterviews] = useState<InterviewRecord[]>([]);
   const [ivLoaded, setIvLoaded] = useState(false);
@@ -805,18 +809,18 @@ function StudentRow({ s, onEdit }: { s: StaffStudentRecord; onEdit: (s: StaffStu
 
           <View style={{ flex: 1, minWidth: 220 } as any}>
             <Text style={tbl.panelLabel}>Bond</Text>
-            {s.bondMonths && placements.length > 0 ? (
+            {bondMode === 'end_date' ? (
+              s.bondEndDate ? <Detail label="Bond end (fixed)" value={s.bondEndDate} /> : <Text style={tbl.meta}>No bond date set.</Text>
+            ) : (
               <View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: C.text }}>{served.toFixed(1)} / {s.bondMonths} mo</Text>
-                  <Text style={{ fontSize: 12.5, fontWeight: '700', color: (bondPct ?? 0) >= 100 ? C.green : C.textMid }}>{bondPct}%</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: C.text }}>{served.toFixed(1)} / {reqMonths} mo</Text>
+                  <Text style={{ fontSize: 12.5, fontWeight: '700', color: bondPct >= 100 ? C.green : C.textMid }}>{bondPct}%</Text>
                 </View>
-                <View style={tbl.bondBar}><View {...({ dataSet: { bar: '1' } } as any)} style={{ width: grown ? `${bondPct}%` as any : '0%', height: '100%', backgroundColor: (bondPct ?? 0) >= 100 ? CHART.emerald : CHART.indigo, borderRadius: 5 }} /></View>
-                <Text style={[tbl.histDates, { marginTop: 8 }]}>{s.stage === 'bond-completed' ? 'Bond completed.' : active ? 'Accruing — on placement.' : 'Paused — on bench, clock stopped.'}</Text>
+                <View style={tbl.bondBar}><View {...({ dataSet: { bar: '1' } } as any)} style={{ width: grown ? `${bondPct}%` as any : '0%', height: '100%', backgroundColor: bondPct >= 100 ? CHART.emerald : CHART.indigo, borderRadius: 5 }} /></View>
+                <Text style={[tbl.histDates, { marginTop: 8 }]}>{s.stage === 'bond-completed' ? 'Bond completed.' : active ? 'Accruing — on placement.' : 'Paused — on bench (accumulative bond).'}</Text>
               </View>
-            ) : s.bondEndDate ? (
-              <Detail label="Bond end" value={s.bondEndDate} />
-            ) : <Text style={tbl.meta}>No bond on record.</Text>}
+            )}
           </View>
 
           <View style={{ flex: 1, minWidth: 220 } as any}>
@@ -918,6 +922,8 @@ function WebStudents() {
   const [editDateJoined, setEditDateJoined] = useState('');
   const [editCcp, setEditCcp] = useState<'yes' | 'completed' | 'no' | undefined>(undefined);
   const [editBondMonths, setEditBondMonths] = useState('24');
+  const [editBondMode, setEditBondMode] = useState<'accumulative' | 'end_date'>('accumulative');
+  const [editBondEnd, setEditBondEnd] = useState('');
   const [editPlacements, setEditPlacements] = useState<PlacementRecord[]>([]);
   const [npCompany, setNpCompany] = useState('');
   const [npRole, setNpRole] = useState('');
@@ -927,7 +933,9 @@ function WebStudents() {
   useEffect(() => { fetchStaffStudentRoster(accessToken).then(setStudents); }, []);
 
   const cohortOptions = useMemo(() => (students ? Array.from(new Set(students.map((s) => s.cohortName))).sort() : []), [students]);
-  const cohortNames = useMemo(() => Array.from(new Set([...(students?.map((s) => s.cohortName) ?? []), ...mgmt.getCohorts().map((cc) => cc.name)])).sort(), [students]);
+  const [cohortList, setCohortList] = useState<string[]>([]);
+  useEffect(() => { mgmt.getCohorts().then((cs) => setCohortList(cs.map((cc) => cc.name))).catch(() => {}); }, []);
+  const cohortNames = useMemo(() => Array.from(new Set([...(students?.map((s) => s.cohortName) ?? []), ...cohortList])).sort(), [students, cohortList]);
   const filtered = useMemo(() => {
     if (!students) return [];
     const q = search.toLowerCase();
@@ -945,7 +953,7 @@ function WebStudents() {
     setEditTarget(s); setEditStage(s.stage);
     setEditCohort(s.cohortName); setEditDob(s.dateOfBirth ?? '');
     setEditAcctMgr(s.accountManager ?? ''); setEditContact(s.contactNo ?? ''); setEditPersonalEmail(s.personalEmail ?? ''); setEditDateJoined(s.dateJoined ?? ''); setEditCcp(s.ccpGrant);
-    setEditBondMonths(String(s.bondMonths ?? 24));
+    setEditBondMonths(String(s.bondMonths ?? 24)); setEditBondMode(s.bondMode ?? 'accumulative'); setEditBondEnd(s.bondEndDate ?? '');
     const existing: PlacementRecord[] = s.placements ? [...s.placements]
       : (s.placementCompany ? [{ id: 'p-legacy', company: s.placementCompany, role: s.placementRole ?? '', reportingOfficer: s.reportingOfficer, roEmail: s.roEmail, startDate: s.placementStartDate ?? today(), status: (s.stage === 'on-placement' ? 'active' : s.stage === 'bond-completed' ? 'completed' : 'terminated') }] : []);
     setEditPlacements(existing);
@@ -969,9 +977,9 @@ function WebStudents() {
     if (!editTarget) return; setSaving(true);
     const act = editPlacements.find((p) => p.status === 'active' && !p.endDate);
     const override = {
-      stage: editStage, cohortName: editCohort, dateOfBirth: editDob || undefined, accountManager: editAcctMgr || undefined, contactNo: editContact || undefined, personalEmail: editPersonalEmail || undefined, dateJoined: editDateJoined || undefined, ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, placements: editPlacements,
+      stage: editStage, cohortName: editCohort, dateOfBirth: editDob || undefined, accountManager: editAcctMgr || undefined, contactNo: editContact || undefined, personalEmail: editPersonalEmail || undefined, dateJoined: editDateJoined || undefined, ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, bondMode: editBondMode, placements: editPlacements,
       placementCompany: act?.company, placementRole: act?.role,
-      reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editTarget.bondEndDate,
+      reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editBondEnd || undefined,
     };
     try {
       if (isSupabaseConfigured) {
@@ -979,9 +987,9 @@ function WebStudents() {
           stage: editStage, cohortName: editCohort, dateOfBirth: editDob || undefined,
           accountManager: editAcctMgr || undefined, contactNo: editContact || undefined,
           personalEmail: editPersonalEmail || undefined, dateJoined: editDateJoined || undefined,
-          ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, placements: editPlacements,
+          ccpGrant: editCcp, bondMonths: Number(editBondMonths) || undefined, bondMode: editBondMode, placements: editPlacements,
           placementCompany: act?.company, placementRole: act?.role,
-          reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editTarget.bondEndDate,
+          reportingOfficer: act?.reportingOfficer, roEmail: act?.roEmail, bondEndDate: editBondEnd || undefined,
         });
       } else {
         mgmt.savePlacement(editTarget.studentId, override);
@@ -1110,8 +1118,25 @@ function WebStudents() {
                 ))}
               </View>
 
-              <Text style={em.section}>Bond length (months)</Text>
-              <TextInput style={[em.input as any, { marginBottom: 22, maxWidth: 140 }]} value={editBondMonths} onChangeText={setEditBondMonths} keyboardType="numeric" placeholder="24" placeholderTextColor="#C2C9D6" />
+              <Text style={em.section}>Bond</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                {([['accumulative', 'Accumulative (pauses on bench)'], ['end_date', 'Fixed end date']] as const).map(([m, lab]) => (
+                  <TouchableOpacity key={m} onPress={() => setEditBondMode(m)} style={[em.stage, editBondMode === m && { backgroundColor: C.slateSoft, borderColor: C.slate }]} {...({ dataSet: { btn: '1' } } as any)}>
+                    <Text style={[em.stageText, editBondMode === m && { color: C.text }]}>{lab}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {editBondMode === 'accumulative' ? (
+                <View style={{ marginBottom: 22 }}>
+                  <Text style={em.fieldLabel}>Required service (months)</Text>
+                  <TextInput style={[em.input as any, { maxWidth: 140 }]} value={editBondMonths} onChangeText={setEditBondMonths} keyboardType="numeric" placeholder="24" placeholderTextColor="#C2C9D6" />
+                </View>
+              ) : (
+                <View style={{ marginBottom: 22 }}>
+                  <Text style={em.fieldLabel}>Bond end date</Text>
+                  <TextInput style={[em.input as any, { maxWidth: 180 }]} value={editBondEnd} onChangeText={setEditBondEnd} placeholder="YYYY-MM-DD" placeholderTextColor="#C2C9D6" />
+                </View>
+              )}
 
               <Text style={em.section}>Placements</Text>
               {editPlacements.length === 0 ? <Text style={[em.muted, { marginBottom: 14 }]}>No placements yet.</Text> : (
@@ -1220,7 +1245,7 @@ const em = StyleSheet.create({
   stage: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 18, borderWidth: 1, borderColor: C.border },
   stageText: { fontSize: 12, fontWeight: '600', color: C.textMid },
   fieldLabel: { fontSize: 12, fontWeight: '600', color: C.textMid, marginBottom: 6 },
-  input: { borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, fontSize: 13, color: C.text, backgroundColor: '#FCFCFD', outlineStyle: 'none' },
+  input: { borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, fontSize: 13, color: C.text, backgroundColor: '#FCFCFD', outlineStyle: 'none' } as any,
   foot: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, padding: 18, borderTopWidth: 1, borderTopColor: C.border },
   cancel: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: C.border },
   cancelText: { fontSize: 13, fontWeight: '600', color: C.textMid },
@@ -1445,8 +1470,7 @@ function WebNews() {
       author: user?.displayName ?? 'Staff',
       ...(fType === 'achievement' ? { achieverName: fAchiever.trim() || undefined, achieverCohort: fCohort.trim() || undefined, certificationName: fCert.trim() || undefined } : {}),
     };
-    mgmt.saveAnnouncement(post);
-    fetchAnnouncements(accessToken).then((a) => { setItems(a); setSaving(false); setAdding(false); setTab(fType === 'achievement' ? 'community' : 'announcements'); });
+    mgmt.saveAnnouncement(post).then(() => fetchAnnouncements(accessToken)).then((a) => { setItems(a); setSaving(false); setAdding(false); setTab(fType === 'achievement' ? 'community' : 'announcements'); });
   }
 
   if (loading) return <Loader />;
@@ -1625,7 +1649,7 @@ const u = StyleSheet.create({
   colsWrap: { flexDirection: 'row', gap: 16, alignItems: 'stretch', flexWrap: 'wrap', width: '100%', maxWidth: LAYOUT.maxW },
   track: { height: 8, backgroundColor: '#EFF1F4', borderRadius: 4, overflow: 'hidden' },
   searchWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FCFCFD', borderWidth: 1, borderColor: C.border, borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8, minWidth: 240 },
-  searchInput: { fontSize: 13, color: C.text, flex: 1, outlineStyle: 'none' },
+  searchInput: { fontSize: 13, color: C.text, flex: 1, outlineStyle: 'none' } as any,
   countTag: { backgroundColor: C.amberSoft, paddingHorizontal: 9, paddingVertical: 2, borderRadius: 12 },
   countTagText: { fontSize: 12, fontWeight: '700', color: C.amber },
 });
@@ -1656,13 +1680,13 @@ function CohortCard({ cohort }: { cohort: Cohort }) {
   const [weeks, setWeeks] = useState<SyllabusWeek[]>([]);
   const [savedMsg, setSavedMsg] = useState(false);
   function toggle() {
-    if (!open && !loaded) { setWeeks(mgmt.getSyllabus(cohort.id)); setLoaded(true); }
+    if (!open && !loaded) { mgmt.getSyllabus(cohort.id).then(setWeeks).catch(() => setWeeks([])); setLoaded(true); }
     setOpen((o) => !o);
   }
   function addWeek() { setWeeks((w) => [...w, { weekNumber: w.length + 1, title: '', topics: '' }]); }
   function setWeek(i: number, patch: Partial<SyllabusWeek>) { setWeeks((w) => w.map((x, idx) => (idx === i ? { ...x, ...patch } : x))); }
   function removeWeek(i: number) { setWeeks((w) => w.filter((_, idx) => idx !== i).map((x, idx) => ({ ...x, weekNumber: idx + 1 }))); }
-  function save() { mgmt.saveSyllabus(cohort.id, weeks); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 1800); }
+  function save() { mgmt.saveSyllabus(cohort.id, weeks).then(() => { setSavedMsg(true); setTimeout(() => setSavedMsg(false), 1800); }); }
   return (
     <View style={mst.cohortCard}>
       <TouchableOpacity onPress={toggle} {...({ dataSet: { btn: '1' } } as any)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -1704,15 +1728,15 @@ function WebManage() {
   const [cohorts, setCohorts] = useState<Cohort[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [tick, setTick] = useState(0);
-  useEffect(() => { setCohorts(mgmt.getCohorts()); setCourses(mgmt.getCourses()); }, [tick]);
+  useEffect(() => { mgmt.getCohorts().then(setCohorts).catch(() => setCohorts([])); mgmt.getCourses().then(setCourses).catch(() => setCourses([])); }, [tick]);
 
   const [cAddOpen, setCAddOpen] = useState(false);
   const [cName, setCName] = useState(''); const [cMoodle, setCMoodle] = useState(''); const [cTrack, setCTrack] = useState('Cybersecurity');
   const [cStart, setCStart] = useState(''); const [cEnd, setCEnd] = useState('');
   function addCohort() {
     if (!cName.trim()) return;
-    mgmt.saveCohort({ id: `c-${Date.now()}`, name: cName.trim(), moodleName: cMoodle.trim() || undefined, track: cTrack.trim() || 'Cybersecurity', startDate: cStart || 'TBD', endDate: cEnd || 'TBD', studentCount: 0, color: CHART_SERIES[cohorts.length % CHART_SERIES.length], active: true });
-    setCName(''); setCMoodle(''); setCStart(''); setCEnd(''); setTick((t) => t + 1); setCAddOpen(false);
+    mgmt.saveCohort({ id: `c-${Date.now()}`, name: cName.trim(), moodleName: cMoodle.trim() || undefined, track: cTrack.trim() || 'Cybersecurity', startDate: cStart || 'TBD', endDate: cEnd || 'TBD', studentCount: 0, color: CHART_SERIES[cohorts.length % CHART_SERIES.length], active: true })
+      .then(() => { setCName(''); setCMoodle(''); setCStart(''); setCEnd(''); setTick((t) => t + 1); setCAddOpen(false); });
   }
 
   const [coTitle, setCoTitle] = useState(''); const [coProvider, setCoProvider] = useState('');
@@ -1721,10 +1745,10 @@ function WebManage() {
   function addCourse() {
     if (!coTitle.trim()) return;
     const spots = Number(coSpots) || 0;
-    mgmt.saveCourse({ id: `course-${Date.now()}`, title: coTitle.trim(), provider: coProvider.trim() || 'Red Alpha', track: coTrack, description: '', startDate: coStart || 'TBD', endDate: coEnd || 'TBD', spotsTotal: spots, spotsRemaining: spots, status: 'open', color: TRACK_COLOR[coTrack] });
-    setCoTitle(''); setCoProvider(''); setCoStart(''); setCoEnd(''); setTick((t) => t + 1);
+    mgmt.saveCourse({ id: `course-${Date.now()}`, title: coTitle.trim(), provider: coProvider.trim() || 'Red Alpha', track: coTrack, description: '', startDate: coStart || 'TBD', endDate: coEnd || 'TBD', spotsTotal: spots, spotsRemaining: spots, status: 'open', color: TRACK_COLOR[coTrack] })
+      .then(() => { setCoTitle(''); setCoProvider(''); setCoStart(''); setCoEnd(''); setTick((t) => t + 1); });
   }
-  function removeCourse(id: string) { mgmt.deleteCourse(id); setTick((t) => t + 1); }
+  function removeCourse(id: string) { mgmt.deleteCourse(id).then(() => setTick((t) => t + 1)); }
 
   return (
     <Page>

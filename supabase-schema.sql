@@ -210,3 +210,19 @@ create table if not exists public.syllabus_weeks (
 alter table public.syllabus_weeks enable row level security;
 create policy "syllabus read"  on public.syllabus_weeks for select using (public.is_staff());
 create policy "syllabus write" on public.syllabus_weeks for all    using (public.is_staff()) with check (public.is_staff());
+
+-- Bond mode (accumulative pauses on bench; end_date = fixed date)
+alter table public.student_profiles add column if not exists bond_mode text default 'accumulative';
+
+-- Announcements (news + community). Readable by any signed-in user; staff write.
+create table if not exists public.announcements (
+  id text primary key,
+  type text, title text, body text,
+  posted_at timestamptz default now(),
+  audience text, pinned boolean default false, author text,
+  achiever_name text, achiever_cohort text, certification_name text, cert_provider text,
+  created_at timestamptz not null default now()
+);
+alter table public.announcements enable row level security;
+create policy "announcements read"  on public.announcements for select using (auth.jwt() is not null);
+create policy "announcements write" on public.announcements for all    using (public.is_staff()) with check (public.is_staff());
