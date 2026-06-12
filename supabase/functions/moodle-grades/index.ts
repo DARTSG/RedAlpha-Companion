@@ -19,10 +19,20 @@ const BASE = (Deno.env.get("MOODLE_BASE_URL") ?? "").replace(/\/+$/, "");
 const TOKEN = Deno.env.get("MOODLE_TOKEN") ?? "";
 const PASSING = Number(Deno.env.get("MOODLE_PASSING_GRADE") ?? "50") || 50;
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+// CORS: restrict to the deployed app origin(s). Set ALLOWED_ORIGINS as a
+// comma-separated secret (e.g. "https://dartsg.github.io,http://localhost:8081").
+// Unset = "*" so nothing breaks before configuration.
+const ALLOWED = (Deno.env.get("ALLOWED_ORIGINS") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+function corsFor(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED.length === 0 ? "*" : (ALLOWED.includes(origin) ? origin : ALLOWED[0]);
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Vary": "Origin",
+  };
+}
+let cors: Record<string, string> = {};
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
@@ -35,6 +45,7 @@ async function moodle(wsfunction: string, params: Record<string, string>) {
 }
 
 Deno.serve(async (req) => {
+  cors = corsFor(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (!BASE || !TOKEN) return json({ error: "Moodle is not configured yet (MOODLE_* secrets missing).", scores: [] }, 200);
 

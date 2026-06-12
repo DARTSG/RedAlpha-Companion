@@ -255,6 +255,17 @@ export interface IntakeProgramme {
   syllabusFilename?: string;
 }
 
+/** A student's application to an upskilling course. */
+export interface CourseApplication {
+  id: string;
+  courseId: string;
+  userId: string;
+  name: string;
+  email: string;
+  status: 'pending' | 'confirmed' | 'declined';
+  createdAt?: string;
+}
+
 /** A certification a student reports as completed; staff verify before it shows fully. */
 export interface CertSubmission {
   id: string;

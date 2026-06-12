@@ -115,3 +115,83 @@ begin
 end $$;
 revoke all on function public.react_to_announcement(text, text, text) from public, anon;
 grant execute on function public.react_to_announcement(text, text, text) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- Course applications: students apply to upskilling courses; staff review.
+-- ----------------------------------------------------------------------------
+create table if not exists public.course_applications (
+  id         uuid primary key default gen_random_uuid(),
+  course_id  text not null,
+  user_id    text not null,
+  name       text not null default '',
+  email      text not null default '',
+  status     text not null default 'pending' check (status in ('pending','confirmed','declined')),
+  created_at timestamptz not null default now(),
+  unique (course_id, user_id)
+);
+alter table public.course_applications enable row level security;
+
+drop policy if exists "capp own read"   on public.course_applications;
+drop policy if exists "capp own write"  on public.course_applications;
+drop policy if exists "capp own update" on public.course_applications;
+drop policy if exists "capp staff all"  on public.course_applications;
+
+create policy "capp own read" on public.course_applications for select
+  using ((select auth.uid())::text = user_id);
+create policy "capp own write" on public.course_applications for insert
+  with check ((select auth.uid())::text = user_id and status = 'pending');
+create policy "capp own update" on public.course_applications for update
+  using ((select auth.uid())::text = user_id)
+  with check ((select auth.uid())::text = user_id and status = 'pending');
+create policy "capp staff all" on public.course_applications for all
+  using ((select public.is_staff())) with check ((select public.is_staff()));
+
+revoke select, insert, update, delete on public.course_applications from anon;
+
+-- ----------------------------------------------------------------------------
+-- Reaction abuse-proofing: one reaction per user per post, tracked in a table.
+-- (Supersedes the simple counter version of react_to_announcement above —
+--  "create or replace" makes the later definition win.)
+-- ----------------------------------------------------------------------------
+create table if not exists public.announcement_reactions (
+  announcement_id text not null,
+  user_id         text not null,
+  emoji           text not null,
+  label           text not null default '',
+  created_at      timestamptz not null default now(),
+  primary key (announcement_id, user_id)
+);
+alter table public.announcement_reactions enable row level security;
+-- No policies: rows are only ever touched via the SECURITY DEFINER function.
+revoke select, insert, update, delete on public.announcement_reactions from anon, authenticated;
+
+create or replace function public.react_to_announcement(p_id text, p_emoji text, p_label text)
+returns void language plpgsql security definer set search_path = public as $$
+declare uid text;
+begin
+  if coalesce(auth.jwt() ->> 'role', '') <> 'authenticated' then
+    raise exception 'not allowed';
+  end if;
+  uid := auth.uid()::text;
+  if uid is null or length(p_emoji) > 8 or length(coalesce(p_label, '')) > 24 then
+    raise exception 'invalid';
+  end if;
+  -- one reaction per user per announcement; repeat calls are no-ops
+  insert into public.announcement_reactions (announcement_id, user_id, emoji, label)
+  values (p_id, uid, p_emoji, coalesce(p_label, ''))
+  on conflict (announcement_id, user_id) do nothing;
+  -- recompute the denormalised counters on the post
+  update public.announcements a
+     set reactions = coalesce((
+       select jsonb_agg(jsonb_build_object('emoji', g.emoji, 'label', g.label, 'count', g.cnt) order by g.first_at)
+       from (
+         select r.emoji, max(r.label) as label, count(*) as cnt, min(r.created_at) as first_at
+         from public.announcement_reactions r
+         where r.announcement_id = p_id
+         group by r.emoji
+       ) g
+     ), '[]'::jsonb)
+   where a.id = p_id;
+end $$;
+revoke all on function public.react_to_announcement(text, text, text) from public, anon;
+grant execute on function public.react_to_announcement(text, text, text) to authenticated;

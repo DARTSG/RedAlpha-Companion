@@ -10,6 +10,31 @@ function useWebBranding() {
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     document.title = 'Red Alpha Companion';
+
+    // Content Security Policy (defense in depth — GitHub Pages can't set
+    // response headers, so a meta tag is the available mechanism).
+    // Skipped in dev: Metro needs eval/source maps.
+    if (!__DEV__ && !document.getElementById('ra-csp')) {
+      const csp = document.createElement('meta');
+      csp.id = 'ra-csp';
+      csp.httpEquiv = 'Content-Security-Policy';
+      csp.content = [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src https://fonts.gstatic.com",
+        "img-src 'self' data: https:",
+        "connect-src 'self' https://*.supabase.co https://*.supabase.in https://login.microsoftonline.com",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self' https://login.microsoftonline.com",
+      ].join('; ');
+      document.head.appendChild(csp);
+      const referrer = document.createElement('meta');
+      referrer.name = 'referrer';
+      referrer.content = 'strict-origin-when-cross-origin';
+      document.head.appendChild(referrer);
+    }
     const svg =
       "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>" +
       "<rect width='64' height='64' rx='14' fill='#DC2626'/>" +

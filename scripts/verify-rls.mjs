@@ -49,7 +49,8 @@ function check(name, ok, detail) {
 async function main() {
   console.log('\n--- ANON (no user token) — expect zero access everywhere ---');
   for (const t of ['student_profiles', 'staff_members', 'interviews', 'intake_programmes',
-                   'app_settings', 'cohorts', 'courses', 'syllabus_weeks', 'announcements']) {
+                   'app_settings', 'cohorts', 'courses', 'syllabus_weeks', 'announcements',
+                   'cert_submissions', 'course_applications', 'announcement_reactions']) {
     const r = await rest(null, 'GET', `${t}?select=*&limit=5`);
     check(`anon read ${t} denied/empty`, r.status >= 400 || r.rows === 0, `status ${r.status}, rows ${r.rows}`);
   }
@@ -94,6 +95,21 @@ async function main() {
     {
       const r = await rest(STUDENT, 'POST', 'announcements', { id: 'rls-probe-student', type: 'news', title: 'x', body: 'x' });
       check('student insert announcements denied', r.status >= 400, `status ${r.status}`);
+    }
+    {
+      // direct table access to reactions must be blocked (RPC-only)
+      const r = await rest(STUDENT, 'GET', 'announcement_reactions?select=*&limit=1');
+      check('student direct read announcement_reactions denied/empty', r.status >= 400 || r.rows === 0, `status ${r.status}, rows ${r.rows}`);
+    }
+    {
+      // cert submission privilege escalation: status must stay pending
+      const r = await rest(STUDENT, 'POST', 'cert_submissions', { user_id: myUserId, name: 'rls-probe', status: 'approved' });
+      check('student cannot self-approve cert submission', r.status >= 400, `status ${r.status}`);
+    }
+    {
+      // applying to a course with a pre-confirmed status must fail
+      const r = await rest(STUDENT, 'POST', 'course_applications', { course_id: 'rls-probe', user_id: myUserId, status: 'confirmed' });
+      check('student cannot self-confirm course application', r.status >= 400, `status ${r.status}`);
     }
   } else console.log('\n(STUDENT_TOKEN not set — student probes skipped)');
 

@@ -11,6 +11,7 @@ import {
   Announcement,
   Cohort,
   Course,
+  CourseApplication,
   IntakeProgramme,
   InterviewRecord,
   PlacementRecord,
@@ -109,6 +110,55 @@ export async function saveCourse(c: Course): Promise<void> {
 export async function deleteCourse(id: string): Promise<void> {
   if (isSupabaseConfigured) { const sb = getSupabaseClient(); if (sb) { await sb.from('courses').delete().eq('id', id); return; } }
   write(K.courses, (read<Course[] | null>(K.courses, null) ?? mockCourses).filter((c) => c.id !== id));
+}
+
+// ---------------------------------------------------------------------------
+// Course applications (student -> staff review)
+// ---------------------------------------------------------------------------
+
+function mapCApp(r: any): CourseApplication {
+  return { id: String(r.id), courseId: r.course_id, userId: r.user_id, name: r.name ?? '', email: r.email ?? '', status: r.status, createdAt: r.created_at ?? undefined };
+}
+
+/** Student: apply (or re-apply after a decline) to a course. */
+export async function applyToCourse(courseId: string, userId: string, name: string, email: string): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  const { error } = await sb.from('course_applications').upsert(
+    { course_id: courseId, user_id: userId, name, email, status: 'pending' },
+    { onConflict: 'course_id,user_id' }
+  );
+  if (error) throw new Error(error.message);
+}
+
+/** Student: own applications across all courses. */
+export async function fetchMyApplications(userId: string): Promise<CourseApplication[]> {
+  if (!isSupabaseConfigured) return [];
+  const sb = getSupabaseClient();
+  if (!sb) return [];
+  const { data, error } = await sb.from('course_applications').select('*').eq('user_id', userId);
+  if (error || !Array.isArray(data)) return [];
+  return data.map(mapCApp);
+}
+
+/** Staff: every application (grouped client-side by course). */
+export async function fetchAllApplications(): Promise<CourseApplication[]> {
+  if (!isSupabaseConfigured) return [];
+  const sb = getSupabaseClient();
+  if (!sb) return [];
+  const { data, error } = await sb.from('course_applications').select('*').order('created_at', { ascending: true });
+  if (error || !Array.isArray(data)) return [];
+  return data.map(mapCApp);
+}
+
+/** Staff: confirm or decline an application. */
+export async function setApplicationStatus(id: string, status: 'confirmed' | 'declined'): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  const { error } = await sb.from('course_applications').update({ status }).eq('id', id);
+  if (error) throw new Error(error.message);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +334,11 @@ export async function inviteMemberAsync(email: string, role: StaffRole, name?: s
   const existing = (await fetchMembers()).find((m) => m.email.toLowerCase() === clean);
   if (existing) { await upsertMember({ ...existing, role }); return; }
   await upsertMember({ id: `m-${Date.now()}`, name: name?.trim() || clean.split('@')[0], email: clean, role, status: 'invited', invitedAt: new Date().toISOString() });
+  // Best-effort invitation email (no-op until the invite-email function is configured).
+  if (isSupabaseConfigured) {
+    const sb = getSupabaseClient();
+    if (sb) { try { await sb.functions.invoke('invite-email', { body: { email: clean, name: name?.trim() ?? '', role } }); } catch {} }
+  }
 }
 
 // ---------------------------------------------------------------------------

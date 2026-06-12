@@ -38,6 +38,7 @@ import {
   Cohort,
   CohortGrowthPoint,
   Course,
+  CourseApplication,
   CourseTrack,
   IntakeProgramme,
   IntakeStatus,
@@ -197,6 +198,11 @@ function Donut({ pct, size = 140, stroke = 14, color = CHART.emerald }: {
   );
 }
 
+/** Escape user-supplied text before embedding in SVG markup (XSS hardening). */
+function escSvg(t: string): string {
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function LineChart({ data, color = CHART.indigo, height = 200 }: {
   data: { label: string; value: number }[]; color?: string; height?: number;
 }) {
@@ -213,7 +219,7 @@ function LineChart({ data, color = CHART.indigo, height = 200 }: {
     `<text x="${padX - 8}" y="${y(g) + 3}" font-size="10" fill="#98A2B3" text-anchor="end" font-family="Inter,sans-serif">${g}</text>`
   ).join('');
   const dots = pts.map((p, i) => `<circle class="ra-dot" style="animation-delay:${(0.6 + i * 0.12).toFixed(2)}s" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4" fill="#fff" stroke="${color}" stroke-width="2.5"/>`).join('');
-  const labels = data.map((d, i) => `<text x="${(padX + i * stepX).toFixed(1)}" y="${H - 8}" font-size="10.5" fill="#667085" text-anchor="middle" font-family="Inter,sans-serif">${d.label}</text>`).join('');
+  const labels = data.map((d, i) => `<text x="${(padX + i * stepX).toFixed(1)}" y="${H - 8}" font-size="10.5" fill="#667085" text-anchor="middle" font-family="Inter,sans-serif">${escSvg(d.label)}</text>`).join('');
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
     `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="0.20"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient>` +
@@ -367,8 +373,8 @@ const NAV = [
   { id: 'users',     label: 'Users',     icon: 'shield' },
 ];
 
-function Sidebar({ active, onSelect, onSignOut, userName, items }: {
-  active: string; onSelect: (id: string) => void; onSignOut: () => void; userName: string; items: typeof NAV;
+function Sidebar({ active, onSelect, onSignOut, userName, userRole, items }: {
+  active: string; onSelect: (id: string) => void; onSignOut: () => void; userName: string; userRole?: string; items: typeof NAV;
 }) {
   return (
     <View style={sb.root}>
@@ -395,7 +401,7 @@ function Sidebar({ active, onSelect, onSignOut, userName, items }: {
         <View style={sb.fAvatar}><Text style={sb.fAvatarText}>{userName.charAt(0).toUpperCase()}</Text></View>
         <View style={{ flex: 1 }}>
           <Text style={sb.fName} numberOfLines={1}>{userName}</Text>
-          <Text style={sb.fRole}>Staff</Text>
+          <Text style={sb.fRole}>{userRole === 'admin' ? 'Admin' : 'Staff'}</Text>
         </View>
         <TouchableOpacity onPress={onSignOut} style={sb.signOut} {...({ dataSet: { nav: '1' } } as any)}>
           <Icon name="logout" size={15} color="rgba(255,255,255,0.6)" />
@@ -2163,6 +2169,25 @@ function WebManage() {
     if (ok) mgmt.deleteCohort(c.id).then(() => setTick((t) => t + 1));
   }
 
+  const [apps, setApps] = useState<CourseApplication[]>([]);
+  useEffect(() => { mgmt.fetchAllApplications().then(setApps).catch(() => {}); }, [tick]);
+  const [appsFor, setAppsFor] = useState<Course | null>(null);
+  const appsByCourse = useMemo(() => {
+    const m: Record<string, CourseApplication[]> = {};
+    apps.forEach((a) => { (m[a.courseId] = m[a.courseId] ?? []).push(a); });
+    return m;
+  }, [apps]);
+  async function decideApp(a: CourseApplication, status: 'confirmed' | 'declined') {
+    try {
+      await mgmt.setApplicationStatus(a.id, status);
+      if (status === 'confirmed') {
+        const co = courses.find((c) => c.id === a.courseId);
+        if (co && co.spotsRemaining > 0) await mgmt.saveCourse({ ...co, spotsRemaining: co.spotsRemaining - 1 });
+      }
+      setTick((t) => t + 1);
+    } catch (e: any) { if (typeof window !== 'undefined') window.alert(e?.message ?? 'Failed'); }
+  }
+
   const [coTitle, setCoTitle] = useState(''); const [coProvider, setCoProvider] = useState('');
   const [coTrack, setCoTrack] = useState<CourseTrack>('cybersecurity');
   const [coStart, setCoStart] = useState(''); const [coEnd, setCoEnd] = useState(''); const [coSpots, setCoSpots] = useState('20');
@@ -2201,6 +2226,7 @@ function WebManage() {
               <Text style={tbl.th}>Track</Text>
               <Text style={tbl.th}>Starts</Text>
               <Text style={tbl.th}>Spots</Text>
+              <Text style={tbl.th}>Applicants</Text>
               <Text style={[tbl.th, { flex: 0.6, textAlign: 'right' }]}> </Text>
             </View>
             {courses.map((co) => (
@@ -2209,6 +2235,16 @@ function WebManage() {
                 <View style={tbl.cell}><View style={[mst.trackTag, { backgroundColor: (TRACK_COLOR[co.track] || C.slate) + '22' }]}><Text style={[mst.trackTagText, { color: TRACK_COLOR[co.track] || C.slate }]}>{co.track}</Text></View></View>
                 <Text style={tbl.cell}>{co.startDate}</Text>
                 <Text style={tbl.cell}>{co.spotsRemaining}/{co.spotsTotal}</Text>
+                <View style={tbl.cell}>
+                  {(appsByCourse[co.id]?.length ?? 0) > 0 ? (
+                    <TouchableOpacity onPress={() => setAppsFor(co)} style={tbl.iconBtn} {...({ dataSet: { btn: '1' } } as any)}>
+                      <Icon name="users" size={12} color={C.textMid} />
+                      <Text style={tbl.iconBtnText}>
+                        {appsByCourse[co.id].filter((a) => a.status === 'pending').length} pending · {appsByCourse[co.id].length} total
+                      </Text>
+                    </TouchableOpacity>
+                  ) : <Text style={tbl.meta}>—</Text>}
+                </View>
                 <View style={[tbl.cell, { flex: 0.6, alignItems: 'flex-end' }]}><TouchableOpacity onPress={() => removeCourse(co.id)} style={mst.delBtn} {...({ dataSet: { btn: '1' } } as any)}><Icon name="trash" size={14} color="#B42318" /></TouchableOpacity></View>
               </View>
             ))}
@@ -2233,6 +2269,37 @@ function WebManage() {
           </Card>
         </View>
       )}
+
+      <Modal visible={Boolean(appsFor)} transparent animationType="fade" onRequestClose={() => setAppsFor(null)}>
+        <View style={em.backdrop}>
+          <View style={[em.sheet, { width: 500 }]} {...({ dataSet: { card: '1' } } as any)}>
+            <View style={em.head}>
+              <Text style={em.title}>Applicants — {appsFor?.title}</Text>
+              <TouchableOpacity onPress={() => setAppsFor(null)} style={em.close} {...({ dataSet: { btn: '1' } } as any)}><Icon name="close" size={15} color={C.textMid} /></TouchableOpacity>
+            </View>
+            <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ padding: 20, gap: 8 }}>
+              {(appsFor ? appsByCourse[appsFor.id] ?? [] : []).map((a) => (
+                <View key={a.id} style={em.pCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={em.pCompany}>{a.name || a.email}</Text>
+                    <Text style={em.muted}>{a.email}</Text>
+                  </View>
+                  {a.status === 'pending' ? (
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <TouchableOpacity onPress={() => decideApp(a, 'confirmed')} style={[em.smallBtn, { borderColor: C.greenDot, backgroundColor: C.greenSoft }]} {...({ dataSet: { btn: '1' } } as any)}><Text style={[em.smallBtnText, { color: C.green }]}>Confirm</Text></TouchableOpacity>
+                      <TouchableOpacity onPress={() => decideApp(a, 'declined')} style={[em.smallBtn, { borderColor: '#FECDCA', backgroundColor: '#FEF3F2' }]} {...({ dataSet: { btn: '1' } } as any)}><Text style={[em.smallBtnText, { color: '#B42318' }]}>Decline</Text></TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={[tbl.pStatus, { backgroundColor: a.status === 'confirmed' ? C.greenSoft : '#FEF3F2' }]}>
+                      <Text style={[tbl.pStatusText, { color: a.status === 'confirmed' ? C.green : '#B42318' }]}>{a.status === 'confirmed' ? 'Confirmed' : 'Declined'}</Text>
+                    </View>
+                  )}
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={cAddOpen} transparent animationType="fade" onRequestClose={() => setCAddOpen(false)}>
         <View style={em.backdrop}>
@@ -2596,7 +2663,7 @@ export function StaffWebPortal() {
   return (
     <NavCtx.Provider value={{ navigate, studentFilter }}>
       <View style={portal.root}>
-        <Sidebar active={safeId} onSelect={(id) => navigate(id)} onSignOut={handleSignOut} userName={userName} items={visibleNav} />
+        <Sidebar active={safeId} onSelect={(id) => navigate(id)} onSignOut={handleSignOut} userName={userName} userRole={user?.role} items={visibleNav} />
         <View style={portal.main}>
           <TopBar title={page.title} subtitle={page.subtitle} userName={userName} userEmail={user?.email} userRole={user?.role} onSignOut={handleSignOut} onStudentView={isAdmin ? enterStudentView : undefined} />
           <PageComponent key={safeId} />

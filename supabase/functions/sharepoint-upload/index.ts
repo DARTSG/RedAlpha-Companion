@@ -32,10 +32,20 @@ const BASE = (Deno.env.get("SP_BASE_FOLDER") ?? "RedAlphaCompanion").replace(/^\
 const KINDS = new Set(["cv", "jd", "performance-report", "syllabus"]);
 const MAX_BYTES = 25 * 1024 * 1024; // Graph simple-PUT limit is 250MB; sessions used above 4MB anyway
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+// CORS: restrict to the deployed app origin(s). Set ALLOWED_ORIGINS as a
+// comma-separated secret (e.g. "https://dartsg.github.io,http://localhost:8081").
+// Unset = "*" so nothing breaks before configuration.
+const ALLOWED = (Deno.env.get("ALLOWED_ORIGINS") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+function corsFor(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED.length === 0 ? "*" : (ALLOWED.includes(origin) ? origin : ALLOWED[0]);
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Vary": "Origin",
+  };
+}
+let cors: Record<string, string> = {};
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
@@ -63,6 +73,7 @@ function b64ToBytes(b64: string): Uint8Array {
 }
 
 Deno.serve(async (req) => {
+  cors = corsFor(req);
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
   if (!TENANT || !CLIENT_ID || !CLIENT_SECRET || !SITE_ID) {

@@ -11,6 +11,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { fetchCourses, fetchStudentStats } from '@/data/api';
+import { applyToCourse, fetchMyApplications } from '@/data/managementApi';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import { Course, Certification } from '@/types';
 import { colors, radius, shadow, spacing, typography } from '@/theme';
 
@@ -44,8 +46,14 @@ function daysUntil(isoDate: string): number {
 // Course card (Luma-style)
 // ---------------------------------------------------------------------------
 
-function CourseCard({ course, index }: { course: Course; index: number }) {
-  const [status, setStatus] = useState(course.status);
+function CourseCard({ course, index, myStatus, onApply }: {
+  course: Course; index: number;
+  myStatus?: 'pending' | 'confirmed' | 'declined';
+  onApply: (course: Course) => Promise<void>;
+}) {
+  const initial = myStatus === 'pending' ? 'applied' : myStatus === 'confirmed' ? 'confirmed' : course.status;
+  const [status, setStatus] = useState(initial);
+  useEffect(() => { setStatus(initial); }, [initial]);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
 
@@ -67,19 +75,25 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
     ]).start();
   }, []);
 
+  function submitApplication() {
+    setStatus('applied'); // optimistic
+    onApply(course).catch((e) => {
+      setStatus(course.status);
+      Alert.alert('Could not apply', e?.message ?? 'Please try again.');
+    });
+  }
   function handleApply() {
     if (status === 'applied' || status === 'confirmed') return;
-    Alert.alert(
-      'Apply for this course?',
-      `${course.title}\n${formatDateRange(course.startDate, course.endDate)}\n\nYour application will be reviewed by the Red Alpha team.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Apply',
-          onPress: () => setStatus('applied'),
-        },
-      ]
-    );
+    const msg = `${course.title}\n${formatDateRange(course.startDate, course.endDate)}\n\nYour application will be reviewed by the Red Alpha team.`;
+    if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      // RN Alert buttons don't fire on web
+      if (window.confirm(`Apply for this course?\n\n${msg}`)) submitApplication();
+      return;
+    }
+    Alert.alert('Apply for this course?', msg, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Apply', onPress: submitApplication },
+    ]);
   }
 
   const days = daysUntil(course.startDate);
@@ -195,16 +209,30 @@ const certStyles = StyleSheet.create({
 // ---------------------------------------------------------------------------
 
 export function UpskillingScreen() {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [certs, setCerts] = useState<Certification[]>([]);
+  const [myApps, setMyApps] = useState<Record<string, 'pending' | 'confirmed' | 'declined'>>({});
   const headerAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.timing(headerAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
     fetchCourses(accessToken).then(setCourses);
     fetchStudentStats(accessToken).then((s) => setCerts(s.certifications));
+    if (user && isSupabaseConfigured) {
+      fetchMyApplications(user.id).then((apps) => {
+        const m: Record<string, 'pending' | 'confirmed' | 'declined'> = {};
+        apps.forEach((a) => { m[a.courseId] = a.status; });
+        setMyApps(m);
+      }).catch(() => {});
+    }
   }, []);
+
+  async function handleApply(course: Course) {
+    if (!user) return;
+    await applyToCourse(course.id, user.id, user.displayName, user.email);
+    setMyApps((prev) => ({ ...prev, [course.id]: 'pending' }));
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -234,7 +262,7 @@ export function UpskillingScreen() {
             <Text style={styles.emptyText}>No courses scheduled yet</Text>
           </View>
         ) : (
-          courses.map((c, i) => <CourseCard key={c.id} course={c} index={i} />)
+          courses.map((c, i) => <CourseCard key={c.id} course={c} index={i} myStatus={myApps[c.id]} onApply={handleApply} />)
         )}
 
         {/* Certifications tracker */}

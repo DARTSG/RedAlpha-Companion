@@ -108,14 +108,14 @@ export function LoginScreen() {
 
             {authError ? <Text style={styles.error}>{authError}</Text> : null}
 
-            {/* Divider */}
+            {/* Demo accounts only exist before the real backend is configured */}
+            {!isAzureConfigured && (<>
             <View style={styles.divider}>
               <View style={styles.dividerLine} />
               <Text style={styles.dividerLabel}>or try a demo</Text>
               <View style={styles.dividerLine} />
             </View>
 
-            {/* Demo buttons */}
             <View style={styles.demoRow}>
               <TouchableOpacity
                 style={[styles.demoBtn, { borderColor: colors.primary }]}
@@ -147,6 +147,7 @@ export function LoginScreen() {
                 <Text style={styles.demoHint}>Full control</Text>
               </TouchableOpacity>
             </View>
+            </>)}
 
             <Text style={styles.footer}>Red Alpha Bootcamp · Singapore</Text>
           </Animated.View>

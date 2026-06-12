@@ -48,9 +48,12 @@ const DEFAULT_REACTIONS: Reaction[] = [
 ];
 
 function AchievementCard({ item }: { item: Announcement }) {
-  const [reactions, setReactions] = useState<Reaction[]>(
-    item.reactions?.length ? item.reactions : DEFAULT_REACTIONS
-  );
+  // Merge server counts onto the default set so all three buttons always show.
+  const merged = [
+    ...DEFAULT_REACTIONS.map((d) => item.reactions?.find((r) => r.emoji === d.emoji) ?? d),
+    ...(item.reactions ?? []).filter((r) => !DEFAULT_REACTIONS.some((d) => d.emoji === r.emoji)),
+  ];
+  const [reactions, setReactions] = useState<Reaction[]>(merged);
   const [praised, setPraised] = useState<string | null>(null);
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
