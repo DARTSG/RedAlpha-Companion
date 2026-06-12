@@ -102,6 +102,9 @@ export async function fetchStudentStats(_accessToken: string | null): Promise<St
             placementRole: row?.placement_role ?? undefined,
             reportingOfficer: row?.reporting_officer ?? undefined,
             bondEndDate: row?.bond_end_date ?? undefined,
+            bondMonths: row?.bond_months ?? 36,
+            bondMode: (row?.bond_mode as 'accumulative' | 'end_date') ?? 'accumulative',
+            bondServedMonths: mgmt.bondServedMonths(Array.isArray(row?.placements) ? row.placements : []),
           };
         }
       } catch {

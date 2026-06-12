@@ -23,6 +23,83 @@ function useEntrance(delay = 0) {
   return { opacity, transform: [{ translateY }] };
 }
 
+/** My Placement & Bond — shown to trainees on placement / extension / bench. */
+function PlacementBondCard({ stats }: { stats: StudentStats }) {
+  const onPlacement = stats.lifecycleStage === 'on-placement' || stats.lifecycleStage === 'extended';
+  const onBench = stats.lifecycleStage === 'job-hunting';
+  if (!onPlacement && !onBench) return null;
+
+  const served = stats.bondServedMonths ?? 0;
+  const required = stats.bondMonths ?? 36;
+  const fixed = stats.bondMode === 'end_date';
+  let pct = 0;
+  let leftLabel = '';
+  if (fixed && stats.bondEndDate) {
+    const total = required * 30.44;
+    const daysLeft = Math.max(0, (new Date(stats.bondEndDate).getTime() - Date.now()) / 86400000);
+    pct = Math.min(1, Math.max(0, 1 - daysLeft / total));
+    leftLabel = daysLeft <= 0 ? 'Bond completed 🎉' : `${Math.ceil(daysLeft / 30.44)} months to go · ends ${stats.bondEndDate}`;
+  } else {
+    pct = Math.min(1, served / required);
+    const left = Math.max(0, required - served);
+    leftLabel = left <= 0 ? 'Bond completed 🎉' : `${left.toFixed(1)} months to go`;
+  }
+
+  return (
+    <Card elevated style={pb.card}>
+      <View style={pb.headRow}>
+        <Text style={pb.emoji}>{onPlacement ? '💼' : '🧭'}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={pb.title}>{onPlacement ? 'My Placement' : 'Between placements'}</Text>
+          {onPlacement && stats.placementCompany ? (
+            <Text style={pb.sub}>{[stats.placementRole, stats.placementCompany].filter(Boolean).join(' @ ')}</Text>
+          ) : (
+            <Text style={pb.sub}>{onBench ? 'The Red Alpha team is matching you with your next role' : ''}</Text>
+          )}
+        </View>
+        {stats.lifecycleStage === 'extended' && (
+          <View style={pb.extTag}><Text style={pb.extTagText}>Extended</Text></View>
+        )}
+      </View>
+
+      {onPlacement && stats.reportingOfficer ? (
+        <View style={pb.roRow}>
+          <Text style={pb.roLabel}>Reporting officer</Text>
+          <Text style={pb.roValue}>{stats.reportingOfficer}</Text>
+        </View>
+      ) : null}
+
+      <View style={pb.bondRow}>
+        <Text style={pb.bondLabel}>Bond progress</Text>
+        <Text style={pb.bondValue}>{served.toFixed(1)} / {required} mo</Text>
+      </View>
+      <ProgressBar progress={pct} color={pct >= 1 ? colors.accent : colors.primary} height={8} />
+      <Text style={pb.bondLeft}>{leftLabel}</Text>
+      {!fixed && onBench ? (
+        <Text style={pb.pauseNote}>⏸ Your bond clock pauses while on the bench — it resumes when your next placement starts.</Text>
+      ) : null}
+    </Card>
+  );
+}
+
+const pb = StyleSheet.create({
+  card: { marginBottom: spacing.md, gap: spacing.sm },
+  headRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  emoji: { fontSize: 28 },
+  title: { ...typography.heading, color: colors.textPrimary },
+  sub: { ...typography.bodySmall, color: colors.textSecondary, marginTop: 2 },
+  extTag: { backgroundColor: '#ECFDFF', paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
+  extTagText: { fontSize: 11, fontWeight: '700', color: '#0E7090' },
+  roRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
+  roLabel: { ...typography.caption, color: colors.textTertiary },
+  roValue: { ...typography.caption, color: colors.textPrimary, fontWeight: '600' },
+  bondRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.xs },
+  bondLabel: { ...typography.bodySmall, color: colors.textSecondary, fontWeight: '600' },
+  bondValue: { ...typography.bodySmall, color: colors.textPrimary, fontWeight: '700' },
+  bondLeft: { ...typography.caption, color: colors.textTertiary, marginTop: 2 },
+  pauseNote: { ...typography.caption, color: colors.textSecondary, backgroundColor: colors.surfaceAlt, padding: spacing.sm, borderRadius: radius.md, marginTop: spacing.xs, lineHeight: 18 },
+});
+
 function SectionLabel({ title }: { title: string }) {
   return <Text style={sStyles.sectionLabel}>{title}</Text>;
 }
@@ -354,6 +431,13 @@ export function HomeScreen() {
         {stats?.lifecycleStage && (
           <Animated.View style={statsStyle}>
             <JourneyTracker stage={stats.lifecycleStage} />
+          </Animated.View>
+        )}
+
+        {/* ── My placement & bond ── */}
+        {stats && (
+          <Animated.View style={statsStyle}>
+            <PlacementBondCard stats={stats} />
           </Animated.View>
         )}
 

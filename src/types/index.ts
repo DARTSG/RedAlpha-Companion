@@ -175,6 +175,10 @@ export interface StudentStats {
   placementRole?: string;
   reportingOfficer?: string;
   bondEndDate?: string;
+  // Bond progress (computed from placements; served time pauses on bench)
+  bondMonths?: number;
+  bondMode?: 'accumulative' | 'end_date';
+  bondServedMonths?: number;
 }
 
 // ---------------------------------------------------------------------------

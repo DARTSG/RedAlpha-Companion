@@ -18,6 +18,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/auth/AuthContext';
 import { fetchCertSubmissions, getStudentProfile, saveStudentProfile, submitCertification, uploadCV } from '@/data/profileApi';
 import { CertSubmission, StudentProfile } from '@/types';
+import { notify } from '@/lib/notify';
 import { colors, radius, spacing, typography } from '@/theme';
 
 const MAX_CV_BYTES = 5 * 1024 * 1024;
@@ -67,16 +68,16 @@ export function ProfileScreen({ visible, onClose }: Props) {
   }, [visible]);
 
   async function handleSubmitCert() {
-    if (!certName.trim()) { Alert.alert('Missing field', 'Please enter the certification name.'); return; }
+    if (!certName.trim()) { notify('Missing field', 'Please enter the certification name.'); return; }
     setCertSending(true);
     try {
       await submitCertification(user!.id, certName.trim(), certProvider.trim() || undefined, certDate.trim() || undefined);
       setCertName(''); setCertProvider(''); setCertDate('');
       const subs = await fetchCertSubmissions(user!.id);
       setCertSubs(subs);
-      Alert.alert('Submitted', 'Your certification was sent to Red Alpha staff for verification.');
+      notify('Submitted', 'Your certification was sent to Red Alpha staff for verification.');
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Could not submit. Please try again.');
+      notify('Error', e?.message ?? 'Could not submit. Please try again.');
     } finally {
       setCertSending(false);
     }
@@ -92,18 +93,18 @@ export function ProfileScreen({ visible, onClose }: Props) {
       if (result.canceled || !result.assets?.length) return;
       const asset = result.assets[0];
       if (asset.size && asset.size > MAX_CV_BYTES) {
-        Alert.alert('File too large', 'Please upload a CV under 5 MB.');
+        notify('File too large', 'Please upload a CV under 5 MB.');
         return;
       }
       setNewCvFile({ uri: asset.uri, name: asset.name, size: asset.size ?? 0, mimeType: asset.mimeType ?? 'application/pdf' });
     } catch {
-      Alert.alert('Error', 'Could not open file picker.');
+      notify('Error', 'Could not open file picker.');
     }
   }
 
   async function handleSave() {
-    if (!fullName.trim()) { Alert.alert('Missing field', 'Please enter your full name.'); return; }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) { Alert.alert('Invalid date', 'Date of birth must be YYYY-MM-DD.'); return; }
+    if (!fullName.trim()) { notify('Missing field', 'Please enter your full name.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) { notify('Invalid date', 'Date of birth must be YYYY-MM-DD.'); return; }
     setSaving(true);
     try {
       let finalCvUrl = cvUrl;
@@ -125,9 +126,9 @@ export function ProfileScreen({ visible, onClose }: Props) {
       };
       await saveStudentProfile(profile);
       setNewCvFile(null);
-      Alert.alert('Saved', 'Your profile has been updated.', [{ text: 'OK', onPress: onClose }]);
+      notify('Saved', 'Your profile has been updated.'); onClose();
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Could not save. Please try again.');
+      notify('Error', e?.message ?? 'Could not save. Please try again.');
     } finally {
       setSaving(false);
     }

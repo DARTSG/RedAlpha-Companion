@@ -13,6 +13,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { fetchCourses, fetchStudentStats } from '@/data/api';
 import { applyToCourse, fetchMyApplications } from '@/data/managementApi';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { confirmDialog, notify } from '@/lib/notify';
 import { Course, Certification } from '@/types';
 import { colors, radius, shadow, spacing, typography } from '@/theme';
 
@@ -79,21 +80,13 @@ function CourseCard({ course, index, myStatus, onApply }: {
     setStatus('applied'); // optimistic
     onApply(course).catch((e) => {
       setStatus(course.status);
-      Alert.alert('Could not apply', e?.message ?? 'Please try again.');
+      notify('Could not apply', e?.message ?? 'Please try again.');
     });
   }
   function handleApply() {
     if (status === 'applied' || status === 'confirmed') return;
     const msg = `${course.title}\n${formatDateRange(course.startDate, course.endDate)}\n\nYour application will be reviewed by the Red Alpha team.`;
-    if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      // RN Alert buttons don't fire on web
-      if (window.confirm(`Apply for this course?\n\n${msg}`)) submitApplication();
-      return;
-    }
-    Alert.alert('Apply for this course?', msg, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Apply', onPress: submitApplication },
-    ]);
+    confirmDialog('Apply for this course?', msg, submitApplication, 'Apply');
   }
 
   const days = daysUntil(course.startDate);
